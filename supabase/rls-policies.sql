@@ -8,7 +8,12 @@ create table if not exists public.profiles (
   role text not null default 'civilian'
     check (role in ('admin', 'dispatch', 'officer', 'civilian')),
   display_name text,
-  created_at timestamptz not null default now()
+  steam_hex text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  last_login_at timestamptz,
+  constraint profiles_steam_hex_check
+    check (steam_hex is null or steam_hex ~* '^(steam:)?[0-9a-f]{8,32}$')
 );
 
 alter table if exists public.profiles
@@ -21,7 +26,16 @@ alter table if exists public.profiles
   add column if not exists display_name text;
 
 alter table if exists public.profiles
+  add column if not exists steam_hex text;
+
+alter table if exists public.profiles
   add column if not exists created_at timestamptz not null default now();
+
+alter table if exists public.profiles
+  add column if not exists updated_at timestamptz;
+
+alter table if exists public.profiles
+  add column if not exists last_login_at timestamptz;
 
 do $$
 begin
@@ -34,6 +48,20 @@ begin
     alter table public.profiles
       add constraint profiles_role_check
       check (role in ('admin', 'dispatch', 'officer', 'civilian'));
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_steam_hex_check'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.profiles
+      add constraint profiles_steam_hex_check
+      check (steam_hex is null or steam_hex ~* '^(steam:)?[0-9a-f]{8,32}$');
   end if;
 end $$;
 
@@ -177,6 +205,8 @@ alter table public.dispatch_calls enable row level security;
 
 create index if not exists profiles_id_idx on public.profiles (id);
 create index if not exists profiles_role_idx on public.profiles (role);
+create index if not exists profiles_email_idx on public.profiles (email);
+create index if not exists profiles_steam_hex_idx on public.profiles (steam_hex);
 create index if not exists civilians_owner_id_idx on public.civilians (owner_id);
 create index if not exists vehicles_owner_id_idx on public.vehicles (owner_id);
 create index if not exists reports_created_by_idx on public.reports (created_by);

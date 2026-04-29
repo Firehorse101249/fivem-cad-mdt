@@ -4,7 +4,6 @@ import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
 type ResetPasswordBody = {
   userId?: unknown;
-  newPassword?: unknown;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -31,21 +30,29 @@ export async function POST(request: Request) {
   }
 
   const userId = isNonEmptyString(body.userId) ? body.userId.trim() : "";
-  const newPassword = isNonEmptyString(body.newPassword) ? body.newPassword : "";
 
-  if (!userId || !newPassword) {
-    return errorResponse("User ID and new password are required.", 400);
-  }
-
-  if (newPassword.length < 6) {
-    return errorResponse("New password must be at least 6 characters.", 400);
+  if (!userId) {
+    return errorResponse("User ID is required.", 400);
   }
 
   try {
     const supabaseAdmin = getSupabaseAdminClient();
-    const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      password: newPassword,
-    });
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("email")
+      .eq("id", userId)
+      .maybeSingle<{ email: string | null }>();
+
+    if (profileError) {
+      return errorResponse(profileError.message, 400);
+    }
+
+    if (!profile?.email) {
+      return errorResponse("User email was not found.", 404);
+    }
+
+    const { error } = await supabaseAdmin.auth.resetPasswordForEmail(profile.email);
 
     if (error) {
       return errorResponse(error.message, 400);
@@ -53,12 +60,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-      },
+      message: `Password reset email sent to ${profile.email}.`,
     });
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : "Unable to reset password.", 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to send password reset.", 500);
   }
 }

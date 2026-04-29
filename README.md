@@ -28,15 +28,26 @@ Normal browser code should only use the Supabase anon key. The Supabase service-
 
 Roles are stored in `public.profiles.role` with starter roles: `admin`, `dispatch`, `officer`, and `civilian`. Admin actions go through protected `app/api/admin/...` API routes. Those routes authenticate the current user, check `public.profiles.role = 'admin'`, and only then use the server-only Supabase admin client.
 
+Public signup is available at `/signup`. The signup API route always creates `public.profiles.role = 'civilian'`; users cannot choose their own role. The form requires a Steam Hex ID so CAD/MDT identity can be tied back to the player account.
+
+Admin user management is available at `/admin`. Admins can list users, open user details, update roles, delete users, and send Supabase password reset emails. Password resets use Supabase's email flow; the app does not manually set user passwords from the admin screen.
+
+For password reset emails, configure Supabase Auth email settings in the Supabase dashboard:
+
+- Set your Site URL and any allowed redirect URLs.
+- Enable/configure the recovery email template.
+- Configure SMTP if you do not want to use Supabase's default email delivery.
+
 To create the first admin, create or invite a Supabase Auth user, copy their Auth user UUID, then run this in the Supabase SQL Editor:
 
 ```sql
-insert into public.profiles (id, email, role, display_name)
-values ('USER_UUID_HERE', 'admin@example.com', 'admin', 'Server Admin')
+insert into public.profiles (id, email, role, display_name, steam_hex)
+values ('USER_UUID_HERE', 'admin@example.com', 'admin', 'Server Admin', 'steam:110000112345678')
 on conflict (id) do update
 set role = 'admin',
     email = excluded.email,
-    display_name = excluded.display_name;
+    display_name = excluded.display_name,
+    steam_hex = excluded.steam_hex;
 ```
 
 ## Learn More

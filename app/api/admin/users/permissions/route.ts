@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
+import { isUserRole } from "@/src/lib/userRules";
 
 type PermissionsBody = {
   userId?: unknown;
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
   }
 
   const userId = isNonEmptyString(body.userId) ? body.userId.trim() : "";
-  const role = isNonEmptyString(body.role) ? body.role.trim() : "";
+  const role = isUserRole(body.role) ? body.role : "";
 
   if (!userId || !role) {
     return errorResponse("User ID and role are required.", 400);
@@ -49,12 +50,10 @@ export async function POST(request: Request) {
       return errorResponse(error.message, 400);
     }
 
-    const { error: profileError } = await supabaseAdmin.from("profiles").upsert({
-      id: data.user.id,
-      email: data.user.email,
+    const { error: profileError } = await supabaseAdmin.from("profiles").update({
       role,
-      display_name: data.user.email,
-    });
+      updated_at: new Date().toISOString(),
+    }).eq("id", userId);
 
     if (profileError) {
       return errorResponse(`Auth user updated, but profile role failed: ${profileError.message}`, 500);

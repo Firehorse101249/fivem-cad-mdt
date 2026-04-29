@@ -43,6 +43,8 @@ export async function POST(request: Request) {
       return errorResponse(error.message, 400);
     }
 
+    await supabaseAdmin.from("profiles").delete().eq("id", userId);
+
     return NextResponse.json({
       success: true,
       message: "User deleted.",

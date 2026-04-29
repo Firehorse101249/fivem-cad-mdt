@@ -99,6 +99,12 @@ export default function LoginPage() {
             <p className="mt-2 text-sm text-neutral-400">
               Use your department email and password.
             </p>
+            <p className="mt-3 text-sm text-neutral-400">
+              Need civilian access?{" "}
+              <Link href="/signup" className="font-medium text-sky-300 hover:text-sky-200">
+                Create an account
+              </Link>
+            </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">

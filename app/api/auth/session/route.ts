@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
 const ACCESS_COOKIE = "sb-access-token";
 
@@ -25,6 +27,34 @@ export async function POST(request: Request) {
       { success: false, error: "A Supabase access token is required." },
       { status: 400 },
     );
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (supabaseUrl && supabaseAnonKey) {
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+    const { data } = await supabase.auth.getUser(body.accessToken);
+
+    if (data.user) {
+      try {
+        const supabaseAdmin = getSupabaseAdminClient();
+        await supabaseAdmin
+          .from("profiles")
+          .update({
+            last_login_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", data.user.id);
+      } catch {
+        // Last-login tracking should not block a successful browser session.
+      }
+    }
   }
 
   const response = NextResponse.json({ success: true });
