@@ -26,6 +26,7 @@ type UserDetails = {
 type ApiResponse = {
   error?: string;
   history?: Record<string, unknown[]>;
+  maintenance?: MaintenanceSetting;
   message?: string;
   profile?: UserProfile;
   success: boolean;
@@ -34,6 +35,11 @@ type ApiResponse = {
     role?: string;
   };
   users?: UserProfile[];
+};
+
+type MaintenanceSetting = {
+  enabled: boolean;
+  message: string;
 };
 
 type ActionState = {
@@ -71,6 +77,11 @@ export default function AdminPage() {
   const [listState, setListState] = useState<ActionState>({ error: "", loading: true, success: "" });
   const [createState, setCreateState] = useState<ActionState>(blankAction);
   const [detailState, setDetailState] = useState<ActionState>(blankAction);
+  const [maintenanceState, setMaintenanceState] = useState<ActionState>(blankAction);
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState(
+    "System temporarily offline for development",
+  );
   const [createEmail, setCreateEmail] = useState("");
   const [createPassword, setCreatePassword] = useState("");
   const [createDisplayName, setCreateDisplayName] = useState("");
@@ -150,6 +161,40 @@ export default function AdminPage() {
 
     void loadInitialUsers();
 
+    async function loadInitialMaintenance() {
+      try {
+        const response = await fetch("/api/admin/system-settings/maintenance");
+        const result = (await response.json()) as ApiResponse;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || !result.success || !result.maintenance) {
+          setMaintenanceState({
+            error: result.error ?? "Unable to load maintenance setting.",
+            loading: false,
+            success: "",
+          });
+          return;
+        }
+
+        setMaintenanceEnabled(result.maintenance.enabled);
+        setMaintenanceMessage(result.maintenance.message);
+        setMaintenanceState({ error: "", loading: false, success: "" });
+      } catch {
+        if (isActive) {
+          setMaintenanceState({
+            error: "Unable to reach the maintenance settings API route.",
+            loading: false,
+            success: "",
+          });
+        }
+      }
+    }
+
+    void loadInitialMaintenance();
+
     return () => {
       isActive = false;
     };
@@ -162,6 +207,48 @@ export default function AdminPage() {
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await loadUsers(search);
+  }
+
+  async function handleSaveMaintenance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMaintenanceState({ error: "", loading: true, success: "" });
+
+    try {
+      const response = await fetch("/api/admin/system-settings/maintenance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: maintenanceEnabled,
+          message: maintenanceMessage,
+        }),
+      });
+      const result = (await response.json()) as ApiResponse;
+
+      if (!response.ok || !result.success || !result.maintenance) {
+        setMaintenanceState({
+          error: result.error ?? "Unable to save maintenance setting.",
+          loading: false,
+          success: "",
+        });
+        return;
+      }
+
+      setMaintenanceEnabled(result.maintenance.enabled);
+      setMaintenanceMessage(result.maintenance.message);
+      setMaintenanceState({
+        error: "",
+        loading: false,
+        success: result.maintenance.enabled
+          ? "Maintenance mode is now ON."
+          : "Maintenance mode is now OFF.",
+      });
+    } catch {
+      setMaintenanceState({
+        error: "Unable to reach the maintenance settings API route.",
+        loading: false,
+        success: "",
+      });
+    }
   }
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
@@ -325,6 +412,15 @@ export default function AdminPage() {
             before touching the server-only service-role client.
           </p>
         </section>
+
+        <SystemControls
+          enabled={maintenanceEnabled}
+          message={maintenanceMessage}
+          onEnabledChange={setMaintenanceEnabled}
+          onMessageChange={setMaintenanceMessage}
+          onSubmit={handleSaveMaintenance}
+          state={maintenanceState}
+        />
 
         <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
           <CreateUserCard
@@ -492,6 +588,80 @@ function CreateUserCard({
         </button>
       </form>
       <ActionFeedback state={createState} />
+    </section>
+  );
+}
+
+function SystemControls({
+  enabled,
+  message,
+  onEnabledChange,
+  onMessageChange,
+  onSubmit,
+  state,
+}: {
+  enabled: boolean;
+  message: string;
+  onEnabledChange: (value: boolean) => void;
+  onMessageChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  state: ActionState;
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-neutral-900 p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+            Development Controls
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-white">System Controls</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-400">
+            Maintenance mode hides the public CAD while development is ongoing.
+            Admin routes remain accessible so you can turn it back off.
+          </p>
+        </div>
+        <span
+          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+            enabled
+              ? "border-amber-300/30 bg-amber-300/10 text-amber-100"
+              : "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
+          }`}
+        >
+          {enabled ? "Maintenance ON" : "Maintenance OFF"}
+        </span>
+      </div>
+
+      <form onSubmit={onSubmit} className="mt-5 grid gap-4 lg:grid-cols-[auto_1fr_auto] lg:items-end">
+        <label className="flex items-center gap-3 rounded-md border border-white/10 bg-neutral-950 px-4 py-3">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => onEnabledChange(event.target.checked)}
+            className="size-5 accent-sky-400"
+          />
+          <span className="text-sm font-medium text-neutral-200">Maintenance Mode</span>
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-neutral-300">Maintenance message</span>
+          <input
+            value={message}
+            onChange={(event) => onMessageChange(event.target.value)}
+            className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-white placeholder:text-neutral-600 focus:border-sky-300"
+            placeholder="System temporarily offline for development"
+            required
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={state.loading}
+          className="inline-flex min-h-11 items-center justify-center rounded-md bg-sky-400 px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {state.loading ? "Saving" : "Save"}
+        </button>
+      </form>
+      <ActionFeedback state={state} />
     </section>
   );
 }
