@@ -2,14 +2,9 @@ import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
-type CreateUserBody = {
-  email?: unknown;
-  password?: unknown;
+type PermissionsBody = {
+  userId?: unknown;
   role?: unknown;
-};
-
-type ApiError = {
-  message?: string;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -27,29 +22,24 @@ export async function POST(request: Request) {
     return adminAuth.response;
   }
 
-  let body: CreateUserBody;
+  let body: PermissionsBody;
 
   try {
-    body = (await request.json()) as CreateUserBody;
+    body = (await request.json()) as PermissionsBody;
   } catch {
     return errorResponse("Invalid JSON body.", 400);
   }
 
-  const email = isNonEmptyString(body.email) ? body.email.trim() : "";
-  const password = isNonEmptyString(body.password) ? body.password : "";
+  const userId = isNonEmptyString(body.userId) ? body.userId.trim() : "";
   const role = isNonEmptyString(body.role) ? body.role.trim() : "";
 
-  if (!email || !password || !role) {
-    return errorResponse("Email, password, and role are required.", 400);
+  if (!userId || !role) {
+    return errorResponse("User ID and role are required.", 400);
   }
 
   try {
     const supabaseAdmin = getSupabaseAdminClient();
-
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
+    const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       user_metadata: {
         role,
       },
@@ -59,23 +49,15 @@ export async function POST(request: Request) {
       return errorResponse(error.message, 400);
     }
 
-    return NextResponse.json(
-      {
-        success: true,
-        user: {
-          id: data.user?.id,
-          email: data.user?.email,
-          role: data.user?.user_metadata?.role ?? role,
-        },
+    return NextResponse.json({
+      success: true,
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        role: data.user.user_metadata?.role ?? role,
       },
-      { status: 201 },
-    );
+    });
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : (error as ApiError).message ?? "Unable to create user.";
-
-    return errorResponse(message, 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to change permissions.", 500);
   }
 }

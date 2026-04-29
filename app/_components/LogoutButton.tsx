@@ -16,6 +16,10 @@ export function LogoutButton() {
       await supabase.auth.signOut();
     }
 
+    await fetch("/api/auth/session", {
+      method: "DELETE",
+    });
+
     router.push("/login");
     router.refresh();
   }

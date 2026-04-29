@@ -27,7 +27,7 @@ export default function LoginPage() {
       return;
     }
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
@@ -36,6 +36,25 @@ export default function LoginPage() {
       setError(authError.message);
       setIsSubmitting(false);
       return;
+    }
+
+    if (data.session) {
+      const sessionResponse = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          accessToken: data.session.access_token,
+          expiresIn: data.session.expires_in,
+        }),
+      });
+
+      if (!sessionResponse.ok) {
+        setError("Signed in, but the server session could not be created.");
+        setIsSubmitting(false);
+        return;
+      }
     }
 
     router.push("/cad");
