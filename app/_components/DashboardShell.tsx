@@ -8,7 +8,7 @@ import { LogoutButton } from "./LogoutButton";
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname === "/cad/dispatch") {
+  if (pathname === "/cad/dispatch" || pathname === "/cad/officer") {
     return <>{children}</>;
   }
 
