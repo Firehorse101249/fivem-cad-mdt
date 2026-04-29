@@ -1,8 +1,17 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { cadSections } from "../_data/cad";
 import { LogoutButton } from "./LogoutButton";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+
+  if (pathname === "/cad/dispatch") {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="grid min-h-screen lg:grid-cols-[280px_1fr]">

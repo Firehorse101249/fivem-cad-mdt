@@ -1,5 +1,5 @@
-import { DispatchConsole } from "../../_components/dispatch/DispatchConsole";
+import { DispatchWorkstation } from "@/components/dispatch/DispatchWorkstation";
 
 export default function DispatchPage() {
-  return <DispatchConsole />;
+  return <DispatchWorkstation />;
 }

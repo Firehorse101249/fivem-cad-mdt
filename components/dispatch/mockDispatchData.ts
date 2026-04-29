@@ -1,0 +1,138 @@
+import type { Bolo, CallFormState, DispatchCall, DispatchLogEntry, DispatchUnit } from "./types";
+
+// Temporary mock data. Replace with Supabase/FiveM live data later.
+
+export const initialCallForm: CallFormState = {
+  callerName: "",
+  callerNumber: "",
+  callSource: "911 Call",
+  involvedPersons: "",
+  involvedVehicles: "",
+  location: "",
+  narrative: "",
+  postal: "",
+  priority: "Medium",
+  serviceType: "Law Enforcement",
+  suggestedUnits: "",
+  type: "",
+};
+
+export const mockCalls: DispatchCall[] = [
+  {
+    age: "12m",
+    assignedUnits: ["2L-14", "2L-22"],
+    callNumber: "C-2026-0142",
+    callerName: "Anonymous",
+    callerNumber: "Blocked",
+    callSource: "911 Call",
+    id: "call-1",
+    involvedPersons: "Unknown driver",
+    involvedVehicles: "Black Sultan RS, partial plate 82Q",
+    location: "Strawberry Ave / Innocence Blvd",
+    narrative: "Multiple reports of a reckless driver striking parked cars and fleeing northbound.",
+    notes: ["Caller disconnected.", "Vehicle may have front-end damage."],
+    openedAt: "21:42",
+    postal: "829",
+    priority: "High",
+    serviceType: "Law Enforcement",
+    status: "Assigned",
+    suggestedUnits: "2 patrol, traffic unit",
+    timeline: ["21:42 call opened", "21:43 units assigned", "21:46 BOLO attached"],
+    type: "Traffic collision",
+  },
+  {
+    age: "7m",
+    assignedUnits: ["E-7", "M-3", "BAT-1"],
+    callNumber: "C-2026-0143",
+    callerName: "M. Roberts",
+    callerNumber: "555-0182",
+    callSource: "911 Call",
+    id: "call-2",
+    involvedPersons: "Building occupants",
+    involvedVehicles: "",
+    location: "Alta St Apartments",
+    narrative: "Smoke visible from second floor. Occupants evacuating. Fire alarm audible.",
+    notes: ["Hydrant on north corner.", "PD requested for traffic control."],
+    openedAt: "21:47",
+    postal: "716",
+    priority: "Critical",
+    serviceType: "Fire",
+    status: "Enroute",
+    suggestedUnits: "Engine, ladder, battalion, medic",
+    timeline: ["21:47 fire tone", "21:48 E-7 responding", "21:49 BAT-1 responding"],
+    type: "Structure fire",
+  },
+  {
+    age: "3m",
+    assignedUnits: ["M-12"],
+    callNumber: "C-2026-0144",
+    callerName: "LS Transit",
+    callerNumber: "555-0199",
+    callSource: "Radio",
+    id: "call-3",
+    involvedPersons: "Unknown patient",
+    involvedVehicles: "",
+    location: "Vespucci Blvd Bus Stop",
+    narrative: "Unconscious person at bus stop. Breathing status unknown.",
+    notes: ["Transit security standing by."],
+    openedAt: "21:52",
+    postal: "603",
+    priority: "High",
+    serviceType: "EMS",
+    status: "On Scene",
+    suggestedUnits: "Medic, law if combative",
+    timeline: ["21:52 EMS assigned", "21:55 M-12 on scene"],
+    type: "Unconscious person",
+  },
+];
+
+export const mockUnits: DispatchUnit[] = [
+  { agency: "LSPD", assignedCall: "C-2026-0142", id: "unit-1", lastUpdate: "21:53", location: "829", memberName: "Officer Hayes", specialty: "Patrol", status: "On Scene", type: "Law Enforcement", unit: "2L-14" },
+  { agency: "LSPD", assignedCall: "C-2026-0142", id: "unit-2", lastUpdate: "21:50", location: "Innocence Blvd", memberName: "Officer Park", specialty: "Traffic", status: "Enroute", type: "Law Enforcement", unit: "2L-22" },
+  { agency: "LSFD", assignedCall: "C-2026-0143", id: "unit-3", lastUpdate: "21:51", location: "Alta St", memberName: "Capt. Irwin", specialty: "Engine", status: "Enroute", type: "Fire", unit: "E-7" },
+  { agency: "LSFD", assignedCall: "C-2026-0143", id: "unit-4", lastUpdate: "21:49", location: "Station 1", memberName: "Battalion Stone", specialty: "Fire command", status: "Busy", type: "Fire", unit: "BAT-1" },
+  { agency: "SAEMS", assignedCall: "C-2026-0144", id: "unit-5", lastUpdate: "21:54", location: "603", memberName: "Medic Santos", specialty: "Medic", status: "On Scene", type: "EMS", unit: "M-12" },
+  { agency: "Downtown Tow", assignedCall: "None", id: "unit-6", lastUpdate: "21:46", location: "Impound", memberName: "R. Cooper", specialty: "Flatbed", status: "Available", type: "Tow", unit: "TOW-4" },
+  { agency: "SAST", assignedCall: "None", id: "unit-7", lastUpdate: "21:55", location: "Senora Fwy", memberName: "Trooper Allen", specialty: "Highway", status: "Panic", type: "Law Enforcement", unit: "5A-31" },
+];
+
+export const mockBolos: Bolo[] = [
+  {
+    associated: "Black Sultan RS, partial 82Q",
+    createdAt: "21:38",
+    createdBy: "DISP-02",
+    description: "Vehicle fled collision scene and may have front-end damage.",
+    id: "bolo-1",
+    lastKnownLocation: "Strawberry Ave northbound",
+    priority: "High",
+    status: "Active",
+    title: "Hit-and-run suspect vehicle",
+    type: "Vehicle",
+  },
+  {
+    associated: "John Doe, red hoodie",
+    createdAt: "20:15",
+    createdBy: "DISP-04",
+    description: "Subject made threats toward responding officers during prior call.",
+    id: "bolo-2",
+    lastKnownLocation: "Legion Square",
+    priority: "Medium",
+    status: "Under Review",
+    title: "Officer safety advisory",
+    type: "Officer safety",
+  },
+];
+
+export const mockLog: DispatchLogEntry[] = [
+  { actor: "DISP-02", id: "log-1", message: "C-2026-0142 assigned to 2L-14 and 2L-22.", related: "C-2026-0142", timestamp: "21:43" },
+  { actor: "SYSTEM", id: "log-2", message: "Signal 100 cleared for primary channel.", timestamp: "21:45" },
+  { actor: "DISP-01", id: "log-3", message: "Fire tone activated for structure fire response.", related: "C-2026-0143", timestamp: "21:47" },
+];
+
+export const incidentTypes = {
+  EMS: ["Medical emergency", "Trauma", "Cardiac", "Overdose", "Unconscious person", "MVA injuries", "Psychiatric crisis"],
+  Fire: ["Structure fire", "Vehicle fire", "Brush fire", "Alarm activation", "Hazmat", "Rescue", "Medical assist"],
+  "Law Enforcement": ["Traffic stop", "Disturbance", "Robbery", "Welfare check", "MVA", "Shots fired"],
+  "Multi-agency": ["MVA injuries", "Structure fire", "Active threat", "Mass casualty", "Evacuation"],
+  Tow: ["Standard tow", "Flatbed", "Heavy wrecker", "Impound", "Roadside assistance"],
+};
