@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 const ADMIN_ACCESS_COOKIE = "sb-access-token";
 
 type AdminAuthSuccess = {
+  role: string;
   user: User;
 };
 
@@ -67,6 +68,11 @@ export async function requireAdmin(request: Request): Promise<AdminAuthResult> {
       autoRefreshToken: false,
       persistSession: false,
     },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
   });
 
   const { data, error } = await supabase.auth.getUser(accessToken);
@@ -77,13 +83,20 @@ export async function requireAdmin(request: Request): Promise<AdminAuthResult> {
     };
   }
 
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", data.user.id)
+    .maybeSingle<{ role: string }>();
+
   // Admin API routes are public URLs, so each route must verify both identity
-  // and authorization before using the service-role admin client.
-  if (data.user.user_metadata?.role !== "admin") {
+  // and authorization against public.profiles.role before using the server-only
+  // service-role client.
+  if (profileError || profile?.role !== "admin") {
     return {
       response: jsonError("Admin access is required.", 403),
     };
   }
 
-  return { user: data.user };
+  return { role: profile.role, user: data.user };
 }

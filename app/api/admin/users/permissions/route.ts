@@ -49,12 +49,23 @@ export async function POST(request: Request) {
       return errorResponse(error.message, 400);
     }
 
+    const { error: profileError } = await supabaseAdmin.from("profiles").upsert({
+      id: data.user.id,
+      email: data.user.email,
+      role,
+      display_name: data.user.email,
+    });
+
+    if (profileError) {
+      return errorResponse(`Auth user updated, but profile role failed: ${profileError.message}`, 500);
+    }
+
     return NextResponse.json({
       success: true,
       user: {
         id: data.user.id,
         email: data.user.email,
-        role: data.user.user_metadata?.role ?? role,
+        role,
       },
     });
   } catch (error) {

@@ -20,6 +20,25 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Supabase Security and RLS
+
+This CAD/MDT uses Supabase Row Level Security to protect public database rows. Run `supabase/rls-policies.sql` in the Supabase SQL Editor to create the starter tables, helper function, indexes, and policies.
+
+Normal browser code should only use the Supabase anon key. The Supabase service-role key bypasses RLS and has full database access, so it must stay server-only in environment variable `SUPABASE_SERVICE_ROLE_KEY`. Do not expose it through any `NEXT_PUBLIC_` variable.
+
+Roles are stored in `public.profiles.role` with starter roles: `admin`, `dispatch`, `officer`, and `civilian`. Admin actions go through protected `app/api/admin/...` API routes. Those routes authenticate the current user, check `public.profiles.role = 'admin'`, and only then use the server-only Supabase admin client.
+
+To create the first admin, create or invite a Supabase Auth user, copy their Auth user UUID, then run this in the Supabase SQL Editor:
+
+```sql
+insert into public.profiles (id, email, role, display_name)
+values ('USER_UUID_HERE', 'admin@example.com', 'admin', 'Server Admin')
+on conflict (id) do update
+set role = 'admin',
+    email = excluded.email,
+    display_name = excluded.display_name;
+```
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

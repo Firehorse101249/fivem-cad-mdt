@@ -59,13 +59,28 @@ export async function POST(request: Request) {
       return errorResponse(error.message, 400);
     }
 
+    if (!data.user) {
+      return errorResponse("Supabase did not return a created user.", 500);
+    }
+
+    const { error: profileError } = await supabaseAdmin.from("profiles").upsert({
+      id: data.user.id,
+      email: data.user.email ?? email,
+      role,
+      display_name: data.user.email ?? email,
+    });
+
+    if (profileError) {
+      return errorResponse(`User created, but profile setup failed: ${profileError.message}`, 500);
+    }
+
     return NextResponse.json(
       {
         success: true,
         user: {
-          id: data.user?.id,
-          email: data.user?.email,
-          role: data.user?.user_metadata?.role ?? role,
+          id: data.user.id,
+          email: data.user.email,
+          role,
         },
       },
       { status: 201 },
