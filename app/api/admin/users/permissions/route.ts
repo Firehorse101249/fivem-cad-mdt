@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
+import { writeAuditLog } from "@/src/lib/auditLog";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 import { isUserRole } from "@/src/lib/userRules";
 
@@ -40,6 +41,12 @@ export async function POST(request: Request) {
 
   try {
     const supabaseAdmin = getSupabaseAdminClient();
+    const { data: beforeProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("email,role,display_name")
+      .eq("id", userId)
+      .maybeSingle<{ display_name: string | null; email: string | null; role: string | null }>();
+
     const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       user_metadata: {
         role,
@@ -58,6 +65,27 @@ export async function POST(request: Request) {
     if (profileError) {
       return errorResponse(`Auth user updated, but profile role failed: ${profileError.message}`, 500);
     }
+
+    await writeAuditLog({
+      actorEmail: adminAuth.user.email,
+      actorId: adminAuth.user.id,
+      afterData: {
+        role,
+      },
+      beforeData: beforeProfile ?? null,
+      entityId: userId,
+      entityType: "profiles",
+      eventType: "user_role_changed",
+      metadata: {
+        new_role: role,
+        previous_role: beforeProfile?.role ?? null,
+        target_email: beforeProfile?.email ?? data.user.email ?? null,
+      },
+      request,
+      severity: beforeProfile?.role === "admin" || role === "admin" ? "warning" : "info",
+      summary: `Changed ${beforeProfile?.email ?? data.user.email ?? userId} role from ${beforeProfile?.role ?? "unknown"} to ${role}.`,
+      targetUserId: userId,
+    });
 
     return NextResponse.json({
       success: true,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
+import { writeAuditLog } from "@/src/lib/auditLog";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
 type UserRouteContext = {
@@ -41,6 +42,20 @@ export async function POST(request: Request, context: UserRouteContext) {
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 });
   }
+
+  await writeAuditLog({
+    actorEmail: adminAuth.user.email,
+    actorId: adminAuth.user.id,
+    entityId: userId,
+    entityType: "auth.users",
+    eventType: "password_reset_sent",
+    metadata: {
+      target_email: profile.email,
+    },
+    request,
+    summary: `Sent password reset email to ${profile.email}.`,
+    targetUserId: userId,
+  });
 
   return NextResponse.json({
     success: true,

@@ -24,7 +24,9 @@ type UserDetails = {
 };
 
 type ApiResponse = {
+  auditLogs?: AuditLogEntry[];
   error?: string;
+  filters?: AuditFilterOptions;
   history?: Record<string, unknown[]>;
   maintenance?: MaintenanceSetting;
   message?: string;
@@ -42,6 +44,28 @@ type MaintenanceSetting = {
   message: string;
 };
 
+type AuditLogEntry = {
+  actor_email: string | null;
+  actor_id: string | null;
+  created_at: string;
+  entity_id: string | null;
+  entity_type: string;
+  event_type: string;
+  id: string;
+  ip_address: string | null;
+  metadata: Record<string, unknown> | null;
+  severity: string;
+  source: string;
+  summary: string;
+  target_civilian_id: string | null;
+  target_user_id: string | null;
+};
+
+type AuditFilterOptions = {
+  entityTypes: string[];
+  eventTypes: string[];
+};
+
 type ActionState = {
   error: string;
   loading: boolean;
@@ -51,7 +75,6 @@ type ActionState = {
 const blankAction: ActionState = { error: "", loading: false, success: "" };
 
 const futureTools = [
-  "Audit log viewer",
   "Department roster manager",
   "Penal code editor",
   "Server integration settings",
@@ -78,6 +101,13 @@ export function AdminConsole() {
   const [createState, setCreateState] = useState<ActionState>(blankAction);
   const [detailState, setDetailState] = useState<ActionState>(blankAction);
   const [maintenanceState, setMaintenanceState] = useState<ActionState>(blankAction);
+  const [auditState, setAuditState] = useState<ActionState>({ error: "", loading: true, success: "" });
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditFilters, setAuditFilters] = useState<AuditFilterOptions>({ entityTypes: [], eventTypes: [] });
+  const [auditUserId, setAuditUserId] = useState("");
+  const [auditEventType, setAuditEventType] = useState("");
+  const [auditEntityType, setAuditEntityType] = useState("");
+  const [auditSearch, setAuditSearch] = useState("");
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState(
     "System temporarily offline for development",
@@ -130,6 +160,43 @@ export function AdminConsole() {
       setDetailState({ error: "", loading: false, success: "" });
     } catch {
       setDetailState({ error: "Unable to reach the user detail API route.", loading: false, success: "" });
+    }
+  }
+
+  async function loadAuditLogs(filters?: {
+    entityType?: string;
+    eventType?: string;
+    search?: string;
+    userId?: string;
+  }) {
+    setAuditState({ error: "", loading: true, success: "" });
+
+    const params = new URLSearchParams();
+    const nextUserId = filters?.userId ?? auditUserId;
+    const nextEventType = filters?.eventType ?? auditEventType;
+    const nextEntityType = filters?.entityType ?? auditEntityType;
+    const nextSearch = filters?.search ?? auditSearch;
+
+    if (nextUserId) params.set("userId", nextUserId);
+    if (nextEventType) params.set("eventType", nextEventType);
+    if (nextEntityType) params.set("entityType", nextEntityType);
+    if (nextSearch) params.set("search", nextSearch);
+    params.set("limit", "150");
+
+    try {
+      const response = await fetch(`/api/admin/audit-logs?${params.toString()}`);
+      const result = (await response.json()) as ApiResponse;
+
+      if (!response.ok || !result.success) {
+        setAuditState({ error: result.error ?? "Unable to load audit logs.", loading: false, success: "" });
+        return;
+      }
+
+      setAuditLogs(result.auditLogs ?? []);
+      setAuditFilters(result.filters ?? { entityTypes: [], eventTypes: [] });
+      setAuditState({ error: "", loading: false, success: "" });
+    } catch {
+      setAuditState({ error: "Unable to reach the audit log API route.", loading: false, success: "" });
     }
   }
 
@@ -195,6 +262,32 @@ export function AdminConsole() {
 
     void loadInitialMaintenance();
 
+    async function loadInitialAuditLogs() {
+      try {
+        const response = await fetch("/api/admin/audit-logs?limit=150");
+        const result = (await response.json()) as ApiResponse;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || !result.success) {
+          setAuditState({ error: result.error ?? "Unable to load audit logs.", loading: false, success: "" });
+          return;
+        }
+
+        setAuditLogs(result.auditLogs ?? []);
+        setAuditFilters(result.filters ?? { entityTypes: [], eventTypes: [] });
+        setAuditState({ error: "", loading: false, success: "" });
+      } catch {
+        if (isActive) {
+          setAuditState({ error: "Unable to reach the audit log API route.", loading: false, success: "" });
+        }
+      }
+    }
+
+    void loadInitialAuditLogs();
+
     return () => {
       isActive = false;
     };
@@ -242,6 +335,7 @@ export function AdminConsole() {
           ? "Maintenance mode is now ON."
           : "Maintenance mode is now OFF.",
       });
+      await loadAuditLogs();
     } catch {
       setMaintenanceState({
         error: "Unable to reach the maintenance settings API route.",
@@ -285,6 +379,7 @@ export function AdminConsole() {
       setCreateSteamHex("");
       setCreateRole("officer");
       await loadUsers(search);
+      await loadAuditLogs();
     } catch {
       setCreateState({ error: "Unable to reach the create user API route.", loading: false, success: "" });
     }
@@ -313,6 +408,7 @@ export function AdminConsole() {
       setDetailState({ error: "", loading: false, success: "Role updated." });
       await loadUsers(search);
       await loadUserDetails(details.profile.id);
+      await loadAuditLogs();
     } catch {
       setDetailState({ error: "Unable to reach the permissions API route.", loading: false, success: "" });
     }
@@ -341,6 +437,7 @@ export function AdminConsole() {
         loading: false,
         success: result.message ?? "Password reset email sent.",
       });
+      await loadAuditLogs();
     } catch {
       setDetailState({ error: "Unable to reach the password reset API route.", loading: false, success: "" });
     }
@@ -374,6 +471,7 @@ export function AdminConsole() {
       setSelectedUserId("");
       setDetailState({ error: "", loading: false, success: "User deleted." });
       await loadUsers(search);
+      await loadAuditLogs();
     } catch {
       setDetailState({ error: "Unable to reach the delete user API route.", loading: false, success: "" });
     }
@@ -420,6 +518,26 @@ export function AdminConsole() {
           onMessageChange={setMaintenanceMessage}
           onSubmit={handleSaveMaintenance}
           state={maintenanceState}
+        />
+
+        <AuditLogViewer
+          entityType={auditEntityType}
+          eventType={auditEventType}
+          filters={auditFilters}
+          logs={auditLogs}
+          onEntityTypeChange={setAuditEntityType}
+          onEventTypeChange={setAuditEventType}
+          onRefresh={() => void loadAuditLogs()}
+          onSearchChange={setAuditSearch}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void loadAuditLogs();
+          }}
+          onUserChange={setAuditUserId}
+          search={auditSearch}
+          state={auditState}
+          userId={auditUserId}
+          users={users}
         />
 
         <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
@@ -537,6 +655,175 @@ export function AdminConsole() {
         </section>
       </div>
     </main>
+  );
+}
+
+function AuditLogViewer({
+  entityType,
+  eventType,
+  filters,
+  logs,
+  onEntityTypeChange,
+  onEventTypeChange,
+  onRefresh,
+  onSearchChange,
+  onSubmit,
+  onUserChange,
+  search,
+  state,
+  userId,
+  users,
+}: {
+  entityType: string;
+  eventType: string;
+  filters: AuditFilterOptions;
+  logs: AuditLogEntry[];
+  onEntityTypeChange: (value: string) => void;
+  onEventTypeChange: (value: string) => void;
+  onRefresh: () => void;
+  onSearchChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUserChange: (value: string) => void;
+  search: string;
+  state: ActionState;
+  userId: string;
+  users: UserProfile[];
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-neutral-900 p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+            Audit Log Viewer
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-white">Change History</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-400">
+            Tracks admin user actions, maintenance changes, and Supabase-backed
+            character/profile table changes. Character events require the audit SQL
+            triggers to be installed.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex min-h-10 items-center justify-center rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-neutral-200 hover:bg-white/10"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <form onSubmit={onSubmit} className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1.2fr_auto]">
+        <label className="block">
+          <span className="text-sm font-medium text-neutral-300">User</span>
+          <select
+            value={userId}
+            onChange={(event) => onUserChange(event.target.value)}
+            className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white focus:border-sky-300"
+          >
+            <option value="">All users</option>
+            {users.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.display_name ?? user.email ?? user.id}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-neutral-300">Log type</span>
+          <select
+            value={eventType}
+            onChange={(event) => onEventTypeChange(event.target.value)}
+            className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white focus:border-sky-300"
+          >
+            <option value="">All log types</option>
+            {filters.eventTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-neutral-300">Entity</span>
+          <select
+            value={entityType}
+            onChange={(event) => onEntityTypeChange(event.target.value)}
+            className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white focus:border-sky-300"
+          >
+            <option value="">All entities</option>
+            {filters.entityTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-neutral-300">Search</span>
+          <input
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white placeholder:text-neutral-600 focus:border-sky-300"
+            placeholder="Summary, email, entity id"
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={state.loading}
+          className="mt-7 inline-flex h-11 items-center justify-center rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950 hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {state.loading ? "Loading" : "Apply"}
+        </button>
+      </form>
+
+      <ActionFeedback state={state} />
+
+      <div className="mt-5 overflow-hidden rounded-md border border-white/10">
+        <div className="grid grid-cols-[0.95fr_0.85fr_1.4fr] bg-neutral-950 px-4 py-3 text-xs uppercase tracking-[0.16em] text-neutral-500 xl:grid-cols-[0.8fr_0.8fr_0.75fr_1.5fr_0.9fr_0.8fr]">
+          <span>Time</span>
+          <span>Type</span>
+          <span className="hidden xl:block">Actor</span>
+          <span>Summary</span>
+          <span className="hidden xl:block">Entity</span>
+          <span className="hidden xl:block">Source</span>
+        </div>
+        <div className="max-h-[520px] overflow-y-auto">
+          {logs.map((log) => (
+            <article
+              key={log.id}
+              className="grid grid-cols-[0.95fr_0.85fr_1.4fr] gap-3 border-t border-white/10 px-4 py-3 text-sm xl:grid-cols-[0.8fr_0.8fr_0.75fr_1.5fr_0.9fr_0.8fr]"
+            >
+              <span className="font-mono text-xs text-neutral-400">{formatDate(log.created_at)}</span>
+              <span className={`h-fit rounded-md border px-2 py-1 text-xs ${severityClass(log.severity)}`}>
+                {log.event_type}
+              </span>
+              <span className="hidden truncate text-neutral-300 xl:block">
+                {log.actor_email ?? log.actor_id ?? "System"}
+              </span>
+              <span className="text-neutral-200">
+                {log.summary}
+                <span className="mt-1 block font-mono text-xs text-neutral-600">
+                  target user: {log.target_user_id ?? "none"} / civilian: {log.target_civilian_id ?? "none"}
+                </span>
+              </span>
+              <span className="hidden break-words font-mono text-xs text-neutral-400 xl:block">
+                {log.entity_type}:{log.entity_id ?? "unknown"}
+              </span>
+              <span className="hidden text-neutral-400 xl:block">{log.source}</span>
+            </article>
+          ))}
+          {!logs.length && !state.loading ? (
+            <div className="border-t border-white/10 px-4 py-6 text-sm text-neutral-400">
+              No audit logs found. Run supabase/audit-log-schema.sql, then perform an admin action.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -854,6 +1141,13 @@ function ActionFeedback({ state }: { state: ActionState }) {
       ) : null}
     </div>
   );
+}
+
+function severityClass(severity: string) {
+  if (severity === "critical") return "border-rose-300/40 bg-rose-400/10 text-rose-100";
+  if (severity === "warning") return "border-amber-300/35 bg-amber-300/10 text-amber-100";
+  if (severity === "debug") return "border-white/10 bg-white/[0.04] text-neutral-400";
+  return "border-sky-300/30 bg-sky-300/10 text-sky-100";
 }
 
 function formatDate(value: string | null) {

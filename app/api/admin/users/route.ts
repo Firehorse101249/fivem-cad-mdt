@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
+import { writeAuditLog } from "@/src/lib/auditLog";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 import { isNonEmptyString, isUserRole, isValidSteamHex } from "@/src/lib/userRules";
 
@@ -119,6 +120,27 @@ export async function POST(request: Request) {
     if (profileError) {
       return errorResponse(`User created, but profile setup failed: ${profileError.message}`, 500);
     }
+
+    await writeAuditLog({
+      actorEmail: adminAuth.user.email,
+      actorId: adminAuth.user.id,
+      afterData: {
+        display_name: displayName || data.user.email || email,
+        email: data.user.email ?? email,
+        role,
+        steam_hex: steamHex || null,
+      },
+      entityId: data.user.id,
+      entityType: "profiles",
+      eventType: "user_created",
+      metadata: {
+        created_email: data.user.email ?? email,
+        created_role: role,
+      },
+      request,
+      summary: `Created user ${data.user.email ?? email} with ${role} role.`,
+      targetUserId: data.user.id,
+    });
 
     return NextResponse.json(
       {

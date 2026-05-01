@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAdminAuthFailure, requireAdmin } from "@/src/lib/adminAuth";
+import { writeAuditLog } from "@/src/lib/auditLog";
 import { getMaintenanceMode } from "@/src/lib/maintenance";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
   }
 
   const supabaseAdmin = getSupabaseAdminClient();
+  const previousMaintenance = await getMaintenanceMode();
   const { error } = await supabaseAdmin.from("system_settings").upsert({
     key: "maintenance_mode",
     value: {
@@ -64,6 +66,25 @@ export async function POST(request: Request) {
   if (error) {
     return errorResponse(error.message, 400);
   }
+
+  await writeAuditLog({
+    actorEmail: adminAuth.user.email,
+    actorId: adminAuth.user.id,
+    afterData: {
+      enabled: body.enabled,
+      message: body.message.trim(),
+    },
+    beforeData: previousMaintenance,
+    entityId: "maintenance_mode",
+    entityType: "system_settings",
+    eventType: "maintenance_updated",
+    metadata: {
+      enabled: body.enabled,
+    },
+    request,
+    severity: body.enabled ? "warning" : "info",
+    summary: `Maintenance mode ${body.enabled ? "enabled" : "disabled"}.`,
+  });
 
   return NextResponse.json({
     success: true,
