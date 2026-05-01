@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CivilianPortal } from "@/components/civilian/CivilianPortal";
 
 export default function CiviliansPage() {
-  return (
-    <UnderConstruction
-      title="Civilians"
-      description="Civilian profiles, licenses, identifiers, and character records are planned for this section."
-    />
-  );
+  return <CivilianPortal />;
 }
