@@ -32,6 +32,18 @@ Public signup is available at `/signup`. The signup API route always creates `pu
 
 Admin user management is available at `/admin`. Admins can list users, open user details, update roles, delete users, and send Supabase password reset emails. Password resets use Supabase's email flow; the app does not manually set user passwords from the admin screen.
 
+## Donations
+
+The public support page is available at `/support`. Set `NEXT_PUBLIC_DONATION_URL` to a hosted payment link from your donation provider to enable the donation buttons.
+
+If the provider supports amount-specific links, the URL can include an `{amount}` placeholder:
+
+```bash
+NEXT_PUBLIC_DONATION_URL="https://your-provider.example/checkout?amount={amount}"
+```
+
+Without the placeholder, every donation button opens the same hosted checkout page.
+
 For password reset emails, configure Supabase Auth email settings in the Supabase dashboard:
 
 - Set your Site URL and any allowed redirect URLs.

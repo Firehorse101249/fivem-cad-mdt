@@ -29,6 +29,25 @@ const stats = [
   ["RBAC", "planned access"],
 ];
 
+const supportOptions = [
+  {
+    title: "One-time donations",
+    description:
+      "Help cover hosting, tooling, dispatch audio, and the next round of CAD/MDT polish.",
+    href: "/support",
+    cta: "Donate",
+    status: "Live",
+  },
+  {
+    title: "Subscription tiers",
+    description:
+      "Monthly supporter perks and community recognition are planned, but not open yet.",
+    href: "/support#subscriptions",
+    cta: "View status",
+    status: "Under construction",
+  },
+];
+
 function ArrowIcon() {
   return (
     <svg
@@ -60,6 +79,9 @@ export default function Home() {
           </span>
         </Link>
         <nav className="hidden items-center gap-3 text-sm text-neutral-300 sm:flex">
+          <Link href="/support" className="rounded-md px-3 py-2 hover:bg-white/10">
+            Support
+          </Link>
           <Link href="/admin" className="rounded-md px-3 py-2 hover:bg-white/10">
             Admin
           </Link>
@@ -99,6 +121,12 @@ export default function Home() {
                 className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-white/15 px-5 py-3 font-semibold text-white hover:bg-white/10"
               >
                 Admin Access <ArrowIcon />
+              </Link>
+              <Link
+                href="/support"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-emerald-300/30 bg-emerald-300/10 px-5 py-3 font-semibold text-emerald-100 hover:bg-emerald-300/15"
+              >
+                Support Sentinel <ArrowIcon />
               </Link>
             </div>
             <div className="mt-10 grid max-w-lg grid-cols-3 gap-3">
@@ -184,12 +212,57 @@ export default function Home() {
             ))}
           </div>
         </section>
+
+        <section className="border-t border-white/10 bg-neutral-900/50">
+          <div className="mx-auto grid max-w-7xl gap-8 px-6 py-16 lg:grid-cols-[0.85fr_1.15fr]">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-300">
+                Support
+              </p>
+              <h2 className="mt-3 text-3xl font-semibold text-white">
+                Keep Sentinel online and moving forward.
+              </h2>
+              <p className="mt-4 leading-7 text-neutral-300">
+                Donations go toward the infrastructure and development work that
+                keeps the CAD/MDT useful for the community.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {supportOptions.map((option) => (
+                <article
+                  key={option.title}
+                  className="rounded-lg border border-white/10 bg-neutral-950/60 p-5"
+                >
+                  <div className="mb-5 flex items-center justify-between gap-3">
+                    <span className="size-2 rounded-full bg-emerald-300" />
+                    <span className="rounded-md border border-white/10 px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                      {option.status}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-semibold text-white">{option.title}</h3>
+                  <p className="mt-3 min-h-18 text-sm leading-6 text-neutral-400">
+                    {option.description}
+                  </p>
+                  <Link
+                    href={option.href}
+                    className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-neutral-200"
+                  >
+                    {option.cta} <ArrowIcon />
+                  </Link>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer className="border-t border-white/10 px-6 py-8 text-sm text-neutral-500">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p>Sentinel CAD/MDT for FiveM roleplay communities.</p>
           <div className="flex gap-4">
+            <Link href="/support" className="hover:text-neutral-200">
+              Support
+            </Link>
             <Link href="/cad" className="hover:text-neutral-200">
               Dashboard
             </Link>
