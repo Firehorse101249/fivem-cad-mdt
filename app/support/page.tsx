@@ -2,63 +2,65 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Support Sentinel CAD/MDT",
+  title: "Donate | Sentinel Community CAD/MDT",
   description:
-    "Support Sentinel CAD/MDT with a one-time donation while subscription tiers are under construction.",
+    "Support the Sentinel FiveM community with donations for CAD hosting, server tools, and ongoing development.",
 };
 
 const donationCheckoutUrl = process.env.NEXT_PUBLIC_DONATION_URL?.trim();
 const donationReady = Boolean(donationCheckoutUrl);
+const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim();
+const discordHref = discordUrl || "/#community-discord";
 
 const donationTiers = [
   {
     amount: 5,
-    title: "Coffee Run",
-    description: "Covers small tooling costs and keeps the next patch moving.",
-    impact: "Good for quick fixes, UI polish, and test deployments.",
+    title: "Fuel Stop",
+    description: "A small boost toward hosting, database usage, and routine CAD upkeep.",
+    impact: "Helps keep the day-to-day systems moving.",
   },
   {
     amount: 15,
-    title: "Server Assist",
-    description: "Helps carry hosting, storage, and auth costs for the CAD.",
-    impact: "Good for keeping public routes fast and reliable.",
+    title: "Patrol Assist",
+    description: "Supports server tools, auth services, and the features members use most.",
+    impact: "Good for steady maintenance and quick quality-of-life fixes.",
   },
   {
     amount: 30,
     title: "Dispatch Boost",
-    description: "Funds bigger work like dispatch workflows and MDT upgrades.",
-    impact: "Good for features that touch officers, dispatchers, and admins.",
+    description: "Backs larger CAD/MDT improvements for dispatch, patrol, civilian, and staff workflows.",
+    impact: "Good for meaningful feature work across departments.",
   },
   {
     amount: 50,
     title: "Community Builder",
-    description: "Backs larger roadmap items and long-form maintenance work.",
-    impact: "Good for sustained development and production hardening.",
+    description: "Helps fund bigger upgrades, production polish, and long-running upkeep.",
+    impact: "Good for larger roadmap items and reliability work.",
   },
 ];
 
 const fundingUses = [
-  "Hosting, database, and authentication costs",
+  "CAD/MDT hosting, database, and authentication costs",
+  "Community server tools, reliability work, and monitoring",
   "Dispatch, officer, civilian, and admin workflow improvements",
-  "Security reviews, bug fixes, and maintenance time",
-  "Future quality-of-life tools for FiveM roleplay communities",
+  "Bug fixes, security cleanup, and staff quality-of-life tools",
 ];
 
-const subscriptionTiers = [
+const supporterNotes = [
   {
-    name: "Supporter",
-    price: "$5/mo",
-    description: "Monthly community backing with basic supporter recognition.",
+    title: "Donations stay community-focused",
+    description:
+      "Support goes toward the systems our members actually use, not toward packaging this CAD for other servers.",
   },
   {
-    name: "Patron",
-    price: "$15/mo",
-    description: "Planned recurring support tier for active community members.",
+    title: "Recognition happens in Discord",
+    description:
+      "If supporter shoutouts or roles are enabled, staff will coordinate them through the community Discord.",
   },
   {
-    name: "Sponsor",
-    price: "$30/mo",
-    description: "Planned recurring support tier for departments and partners.",
+    title: "Access is still staff-managed",
+    description:
+      "Donating helps the community, but CAD permissions and department roles still follow the normal approval process.",
   },
 ];
 
@@ -145,60 +147,88 @@ function DonateButton({ amount, children, variant = "primary" }: DonateButtonPro
   );
 }
 
+type CommunityLinkProps = {
+  href: string;
+  children: React.ReactNode;
+  className: string;
+};
+
+function CommunityLink({ href, children, className }: CommunityLinkProps) {
+  const isExternal = href.startsWith("http");
+
+  if (isExternal) {
+    return (
+      <a href={href} className={className} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 export default function SupportPage() {
   return (
-    <div className="min-h-screen overflow-hidden bg-neutral-950 text-neutral-100">
+    <div className="min-h-screen overflow-hidden bg-[#08090d] text-neutral-100">
       <header className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-5">
         <Link href="/" className="flex items-center gap-3">
-          <span className="grid size-10 place-items-center rounded-md border border-sky-400/40 bg-sky-400/10 text-sm font-bold text-sky-200">
+          <span className="grid size-10 place-items-center rounded-md border border-emerald-300/35 bg-emerald-300/10 text-sm font-bold text-emerald-100">
             SC
           </span>
           <span>
-            <span className="block text-sm font-semibold uppercase tracking-[0.24em] text-neutral-400">
-              Sentinel
+            <span className="block text-sm font-semibold uppercase text-neutral-400">
+              Sentinel Community
             </span>
-            <span className="block text-lg font-semibold text-white">Support</span>
+            <span className="block text-lg font-semibold text-white">Donations</span>
           </span>
         </Link>
         <nav className="hidden items-center gap-3 text-sm text-neutral-300 sm:flex">
           <Link href="/" className="rounded-md px-3 py-2 hover:bg-white/10">
             Home
           </Link>
-          <Link href="/login" className="rounded-md px-3 py-2 hover:bg-white/10">
-            Login
-          </Link>
+          <CommunityLink href={discordHref} className="rounded-md px-3 py-2 hover:bg-white/10">
+            Discord
+          </CommunityLink>
           <Link
-            href="/cad"
-            className="inline-flex items-center gap-2 rounded-md bg-sky-400 px-4 py-2 font-semibold text-neutral-950 hover:bg-sky-300"
+            href="/login"
+            className="inline-flex items-center gap-2 rounded-md bg-cyan-300 px-4 py-2 font-semibold text-neutral-950 hover:bg-cyan-200"
           >
-            Dashboard <ArrowIcon />
+            CAD login <ArrowIcon />
           </Link>
         </nav>
       </header>
 
       <main>
-        <section className="mx-auto grid min-h-[calc(100vh-80px)] w-full max-w-7xl items-center gap-10 px-6 pb-14 pt-8 lg:grid-cols-[0.95fr_1.05fr]">
+        <section className="mx-auto grid min-h-[calc(100vh-80px)] w-full max-w-7xl items-center gap-10 px-6 pb-14 pt-8 lg:grid-cols-[0.92fr_1.08fr]">
           <div>
             <p className="mb-5 inline-flex rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-sm font-medium text-emerald-200">
-              Community-funded CAD/MDT development
+              Support our FiveM community
             </p>
             <h1 className="text-5xl font-semibold leading-tight text-white sm:text-6xl">
-              Support Sentinel CAD/MDT
+              Help keep the CAD and community tools online.
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-neutral-300">
-              One-time donations help keep the platform online, cover services,
-              and fund the features that make dispatch, officer, civilian, and
-              admin workflows better for the whole FiveM community.
+              Donations help pay for the systems behind our roleplay server:
+              CAD/MDT hosting, database usage, authentication, staff tools, and
+              ongoing development for our members.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <DonateButton variant="primary">Donate now</DonateButton>
-              <Link
-                href="#subscriptions"
+              <CommunityLink
+                href={discordHref}
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
               >
-                Subscription status <ArrowIcon />
-              </Link>
+                Visit Discord <ArrowIcon />
+              </CommunityLink>
             </div>
+            <p className="mt-5 max-w-xl text-sm leading-6 text-neutral-500">
+              Donations are optional and do not purchase CAD access, rank,
+              department placement, or staff permissions.
+            </p>
           </div>
 
           <div
@@ -207,11 +237,11 @@ export default function SupportPage() {
           >
             <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-300">
-                  Donations
+                <p className="text-sm font-semibold uppercase text-emerald-300">
+                  One-time donations
                 </p>
                 <h2 className="mt-2 text-2xl font-semibold text-white">
-                  Choose a one-time amount
+                  Pick an amount that feels right
                 </h2>
               </div>
               <span
@@ -260,7 +290,7 @@ export default function SupportPage() {
                 <div>
                   <h3 className="font-semibold text-white">Custom amount</h3>
                   <p className="mt-1 text-sm leading-6 text-neutral-400">
-                    Open the secure checkout and enter any amount that fits.
+                    Open checkout and enter any amount that works for you.
                   </p>
                 </div>
                 <DonateButton variant="secondary">Open checkout</DonateButton>
@@ -269,14 +299,14 @@ export default function SupportPage() {
           </div>
         </section>
 
-        <section className="border-y border-white/10 bg-neutral-900/60">
+        <section className="border-y border-white/10 bg-neutral-900/70">
           <div className="mx-auto grid max-w-7xl gap-8 px-6 py-16 lg:grid-cols-[0.8fr_1.2fr]">
             <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-300">
+              <p className="text-sm font-semibold uppercase text-cyan-300">
                 Funding priorities
               </p>
               <h2 className="mt-3 text-3xl font-semibold text-white">
-                Every donation backs the work people actually use.
+                Donations go back into the server experience.
               </h2>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -285,7 +315,7 @@ export default function SupportPage() {
                   key={item}
                   className="rounded-lg border border-white/10 bg-neutral-950/60 p-4"
                 >
-                  <span className="mb-4 block size-2 rounded-full bg-sky-300" />
+                  <span className="mb-4 block size-2 rounded-full bg-cyan-300" />
                   <p className="text-sm leading-6 text-neutral-300">{item}</p>
                 </div>
               ))}
@@ -293,49 +323,26 @@ export default function SupportPage() {
           </div>
         </section>
 
-        <section id="subscriptions" className="mx-auto max-w-7xl px-6 py-16">
-          <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-300">
-                Subscriptions
-              </p>
-              <h2 className="mt-3 text-3xl font-semibold text-white">
-                Monthly tiers are under construction.
-              </h2>
-              <p className="mt-4 max-w-3xl leading-7 text-neutral-300">
-                Subscription perks, recurring billing, and supporter management
-                are planned for a later release. One-time donations are the live
-                support path right now.
-              </p>
-            </div>
-            <span className="inline-flex min-h-10 items-center rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-1 text-sm font-semibold text-amber-200">
-              Under construction
-            </span>
+        <section className="mx-auto max-w-7xl px-6 py-16">
+          <div className="mb-8">
+            <p className="text-sm font-semibold uppercase text-indigo-300">
+              Community notes
+            </p>
+            <h2 className="mt-3 max-w-3xl text-3xl font-semibold text-white">
+              Support is appreciated, but the community process stays the same.
+            </h2>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
-            {subscriptionTiers.map((tier) => (
+            {supporterNotes.map((note) => (
               <article
-                key={tier.name}
-                className="rounded-lg border border-white/10 bg-white/[0.04] p-5 opacity-80"
+                key={note.title}
+                className="rounded-lg border border-white/10 bg-white/[0.04] p-5"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-lg font-semibold text-white">{tier.name}</h3>
-                    <p className="mt-2 text-2xl font-semibold text-neutral-300">
-                      {tier.price}
-                    </p>
-                  </div>
-                  <span className="rounded-md bg-amber-300/10 px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">
-                    Soon
-                  </span>
-                </div>
-                <p className="mt-4 min-h-18 text-sm leading-6 text-neutral-400">
-                  {tier.description}
+                <h3 className="text-lg font-semibold text-white">{note.title}</h3>
+                <p className="mt-4 text-sm leading-6 text-neutral-400">
+                  {note.description}
                 </p>
-                <span className="mt-5 inline-flex min-h-11 cursor-not-allowed items-center justify-center rounded-md border border-white/10 px-4 py-2 text-sm font-semibold text-neutral-500">
-                  Not available yet
-                </span>
               </article>
             ))}
           </div>
@@ -344,11 +351,14 @@ export default function SupportPage() {
 
       <footer className="border-t border-white/10 px-6 py-8 text-sm text-neutral-500">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p>Sentinel CAD/MDT donations support infrastructure and development.</p>
+          <p>Sentinel Community donations support our CAD, tools, and server operations.</p>
           <div className="flex gap-4">
             <Link href="/" className="hover:text-neutral-200">
               Home
             </Link>
+            <CommunityLink href={discordHref} className="hover:text-neutral-200">
+              Discord
+            </CommunityLink>
             <Link href="/login" className="hover:text-neutral-200">
               Login
             </Link>

@@ -36,6 +36,12 @@ Admin user management is available at `/admin`. Admins can list users, open user
 
 The public support page is available at `/support`. Set `NEXT_PUBLIC_DONATION_URL` to a hosted payment link from your donation provider to enable the donation buttons.
 
+Set `NEXT_PUBLIC_DISCORD_URL` to your community invite link to enable the Discord calls to action on the home and support pages:
+
+```bash
+NEXT_PUBLIC_DISCORD_URL="https://discord.gg/your-invite"
+```
+
 If the provider supports amount-specific links, the URL can include an `{amount}` placeholder:
 
 ```bash

@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinel CAD/MDT",
-  description: "A modern FiveM computer aided dispatch and mobile data terminal.",
+  title: "Sentinel Community CAD/MDT",
+  description:
+    "The private CAD/MDT and community operations hub for the Sentinel FiveM roleplay server.",
 };
 
 export default function RootLayout({
