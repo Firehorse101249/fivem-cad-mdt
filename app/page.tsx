@@ -1,6 +1,7 @@
 import Link from "next/link";
 
-const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim();
+const defaultDiscordUrl = "https://discord.gg/QdzVHndQqF";
+const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim() || defaultDiscordUrl;
 const discordHref = discordUrl || "#community-discord";
 const discordIsReady = Boolean(discordUrl);
 

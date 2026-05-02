@@ -9,7 +9,8 @@ export const metadata: Metadata = {
 
 const donationCheckoutUrl = process.env.NEXT_PUBLIC_DONATION_URL?.trim();
 const donationReady = Boolean(donationCheckoutUrl);
-const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim();
+const defaultDiscordUrl = "https://discord.gg/QdzVHndQqF";
+const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim() || defaultDiscordUrl;
 const discordHref = discordUrl || "/#community-discord";
 
 const donationTiers = [

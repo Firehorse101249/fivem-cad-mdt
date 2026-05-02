@@ -39,7 +39,7 @@ The public support page is available at `/support`. Set `NEXT_PUBLIC_DONATION_UR
 Set `NEXT_PUBLIC_DISCORD_URL` to your community invite link to enable the Discord calls to action on the home and support pages:
 
 ```bash
-NEXT_PUBLIC_DISCORD_URL="https://discord.gg/your-invite"
+NEXT_PUBLIC_DISCORD_URL="https://discord.gg/QdzVHndQqF"
 ```
 
 If the provider supports amount-specific links, the URL can include an `{amount}` placeholder:
