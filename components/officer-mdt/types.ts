@@ -24,13 +24,16 @@ export type UnitStatus =
   | "Enroute"
   | "On Scene"
   | "Busy"
+  | "Complete"
   | "Traffic Stop"
   | "Transporting"
   | "At Station"
   | "Out of Service"
   | "Panic"
+  | "Requested"
   | "Signal 100"
   | "Staging"
+  | "Towing"
   | "Rehab"
   | "At Hospital";
 
@@ -113,6 +116,7 @@ export type UnitRosterEntry = {
   agency: Agency;
   assignedCall: string;
   callsign: string;
+  id: string;
   location: string;
   status: UnitStatus;
   unitType: UnitType;

@@ -578,6 +578,7 @@ export function dispatchUnitsToRoster(units: DispatchUnit[]): UnitRosterEntry[] 
     agency: unit.type as Agency,
     assignedCall: unit.assignedCall,
     callsign: unit.unit,
+    id: unit.id,
     location: unit.location,
     status: unit.status as UnitRosterEntry["status"],
     unitType: unit.specialty as UnitRosterEntry["unitType"],

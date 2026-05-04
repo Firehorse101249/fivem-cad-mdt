@@ -66,7 +66,8 @@ function statusClass(status: string) {
   if (["Enroute", "On Scene", "Transporting", "Staging", "At Hospital"].includes(status)) {
     return "border-sky-300/35 bg-sky-400/10 text-sky-100";
   }
-  if (["Busy", "Traffic Stop", "Rehab"].includes(status)) return "border-amber-300/35 bg-amber-300/10 text-amber-100";
+  if (["Busy", "Traffic Stop", "Rehab", "Requested", "Towing"].includes(status)) return "border-amber-300/35 bg-amber-300/10 text-amber-100";
+  if (status === "Complete") return "border-emerald-300/35 bg-emerald-400/10 text-emerald-100";
   return "border-white/15 bg-white/[0.06] text-neutral-200";
 }
 
@@ -171,8 +172,11 @@ export function OfficerMdt() {
 
   useEffect(() => {
     if (!session) return;
-    const currentUnit = roster.find((unit) => unit.callsign === session.callsign);
+    const currentUnit = roster.find((unit) => (unitRowId && unit.id === unitRowId) || unit.callsign === session.callsign);
     if (!currentUnit) return;
+    if (!unitRowId || unitRowId !== currentUnit.id) {
+      queueMicrotask(() => setUnitRowId(currentUnit.id));
+    }
     if (currentUnit.status === "Panic") {
       queueMicrotask(() => {
         setPanicActive(true);
@@ -188,8 +192,25 @@ export function OfficerMdt() {
         setStatus(currentUnit.status);
         setLog((current) => [{ id: makeId("log"), message: "Dispatcher cleared this unit's panic status.", module: "Panic", timestamp: nowTime() }, ...current]);
       });
+      return;
     }
-  }, [panicActive, roster, session]);
+    if (currentUnit.status !== status) {
+      queueMicrotask(() => {
+        setStatus(currentUnit.status);
+        setLog((current) => [
+          { id: makeId("log"), message: `Dispatcher changed this unit's status to ${currentUnit.status}.`, module: "Status", timestamp: nowTime() },
+          ...current,
+        ]);
+      });
+    }
+    if (currentUnit.callsign !== session.callsign) {
+      queueMicrotask(() => {
+        const nextSession = { ...session, callsign: currentUnit.callsign };
+        setSession(nextSession);
+        window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+      });
+    }
+  }, [panicActive, roster, session, status, unitRowId]);
 
   useEffect(() => {
     const hasSignal100 = roster.some((unit) => unit.status === "Panic" || unit.status === "Signal 100");
