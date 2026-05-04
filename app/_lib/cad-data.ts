@@ -492,6 +492,18 @@ export async function updateDispatchUnitStatus(supabase: SupabaseClient, unitId:
   return data as Row;
 }
 
+export async function updateDispatchUnitIdentifier(supabase: SupabaseClient, unitId: string, callsign: string) {
+  const { data, error } = await supabase
+    .from("dispatch_units")
+    .update({ callsign: callsign.trim().toUpperCase(), updated_at: new Date().toISOString() })
+    .eq("id", unitId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Row;
+}
+
 export async function removeDispatchUnit(supabase: SupabaseClient, unitId: string) {
   const { error } = await supabase.from("dispatch_units").delete().eq("id", unitId);
   if (error) throw error;

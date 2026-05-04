@@ -233,7 +233,7 @@ export function OfficerMdt() {
     }
   }
 
-  async function changeStatus(nextStatus: UnitStatus) {
+  async function changeStatus(nextStatus: UnitStatus, options: { playPanicTone?: boolean } = {}) {
     setStatus(nextStatus);
     const supabase = getSupabaseBrowserClient();
     if (supabase && session) {
@@ -248,6 +248,9 @@ export function OfficerMdt() {
     if (nextStatus === "Panic") {
       setPanicActive(true);
       setModule("panic");
+      if (options.playPanicTone !== false) {
+        void triggerPanicSequence(session?.callsign ?? "Field unit");
+      }
       addLog("Panic status activated and synced to dispatch_units.", "Panic");
       return;
     }
@@ -311,9 +314,10 @@ export function OfficerMdt() {
     audio.volume = Math.min(1, Math.max(0, tone.volume * 0.9));
     audioRefs.current = [audio];
     try {
-      await audio.play();
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         audio.onended = () => resolve();
+        audio.onerror = () => reject(new Error(`${tone.label} audio could not play.`));
+        void audio.play().catch(reject);
       });
     } catch {
       setSyncNotice(`${tone.label} audio could not play in this browser.`);
@@ -355,7 +359,7 @@ export function OfficerMdt() {
     setPanicActive(true);
     setPanicArmed(false);
     void triggerPanicSequence(session?.callsign ?? "Field unit");
-    await changeStatus("Panic");
+    await changeStatus("Panic", { playPanicTone: false });
     addLog("Emergency panic activated and synced to dispatch.", "Panic");
   }
 

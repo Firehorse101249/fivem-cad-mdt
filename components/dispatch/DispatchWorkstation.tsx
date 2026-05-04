@@ -12,6 +12,7 @@ import {
   removeDispatchUnitFromCall,
   searchCadRecords,
   updateDispatchCallStatus,
+  updateDispatchUnitIdentifier,
   updateDispatchUnitStatus,
   type CadLookupResult,
 } from "@/app/_lib/cad-data";
@@ -50,6 +51,7 @@ const modules: Array<{ id: DispatchModule; label: string }> = [
 ];
 
 const callStatuses: CallStatus[] = ["Pending", "Assigned", "Enroute", "On Scene", "Holding", "Closed"];
+const unitStatuses: DispatchUnit["status"][] = ["Available", "Assigned", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"];
 const priorities: Priority[] = ["Low", "Medium", "High", "Critical"];
 const serviceTypes: ServiceType[] = ["Law Enforcement", "Fire", "EMS", "Tow", "Multi-agency"];
 const boloTypes: BoloType[] = ["Person", "Vehicle", "Weapon", "Officer safety", "Missing person", "Stolen vehicle"];
@@ -392,6 +394,28 @@ export function DispatchWorkstation() {
     }
   }
 
+  async function assignUnitsToCall(callId: string, unitIds: string[]) {
+    const supabase = getSupabaseBrowserClient();
+    const call = calls.find((item) => item.id === callId);
+    const selectedUnits = units.filter((unit) => unitIds.includes(unit.id));
+    if (!supabase || !call || !selectedUnits.length) {
+      setSyncNotice("Select a valid call and at least one unit before assigning.");
+      return;
+    }
+
+    try {
+      let nextCall = call;
+      for (const unit of selectedUnits) {
+        nextCall = await assignDispatchUnitToCall(supabase, nextCall, unit);
+        addLog(`${unit.unit} assigned to ${call.callNumber}.`, call.callNumber);
+      }
+      await refreshDispatchData(call.id);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not assign units to call.");
+      await refreshDispatchData(call.id);
+    }
+  }
+
   async function removeUnitFromCall(callId: string, unitId: string) {
     const supabase = getSupabaseBrowserClient();
     const call = calls.find((item) => item.id === callId);
@@ -408,6 +432,26 @@ export function DispatchWorkstation() {
     } catch (error) {
       setSyncNotice(error instanceof Error ? error.message : "Could not remove unit from call.");
       await refreshDispatchData(call.id);
+    }
+  }
+
+  async function updateUnitIdentifier(unitId: string, callsign: string) {
+    const supabase = getSupabaseBrowserClient();
+    const unit = units.find((item) => item.id === unitId);
+    const nextCallsign = callsign.trim().toUpperCase();
+    if (!supabase || !unit || !nextCallsign) {
+      setSyncNotice("Enter a valid unit identifier before saving.");
+      return;
+    }
+
+    setUnits((current) => current.map((item) => (item.id === unitId ? { ...item, unit: nextCallsign, lastUpdate: nowTime() } : item)));
+    try {
+      await updateDispatchUnitIdentifier(supabase, unitId, nextCallsign);
+      addLog(`${unit.unit} identifier updated to ${nextCallsign}.`, nextCallsign);
+      await refreshDispatchData();
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not update unit identifier.");
+      await refreshDispatchData();
     }
   }
 
@@ -569,19 +613,21 @@ export function DispatchWorkstation() {
             {activeModule === "command-center" ? (
               <CommandCenter
                 calls={calls}
-                log={log}
-                onCallSelect={(id) => {
-                  setSelectedCallId(id);
-                  setActiveModule("active-calls");
-                }}
+                onAssignUnit={assignUnitsToCall}
+                onAttachUnit={assignUnitToCall}
+                onCallSelect={setSelectedCallId}
                 onModuleChange={setActiveModule}
+                onRemoveUnit={removeUnitFromCall}
+                onStatusChange={updateCallStatus}
+                onUnitStatusChange={changeUnitStatus}
+                selectedCall={selectedCall}
                 units={units}
               />
             ) : null}
             {activeModule === "active-calls" ? (
               <ActiveCallsModule
                 calls={calls}
-                onAssignUnit={assignUnitToCall}
+                onAssignUnit={assignUnitsToCall}
                 onCallSelect={setSelectedCallId}
                 onRemoveUnit={removeUnitFromCall}
                 onStatusChange={updateCallStatus}
@@ -593,7 +639,7 @@ export function DispatchWorkstation() {
               <CallCreationModule form={callForm} onChange={setCallForm} onSubmit={createCall} />
             ) : null}
             {activeModule === "units" ? (
-              <UnitsModule filter={unitFilter} onFilterChange={setUnitFilter} onRemoveUnit={removeUnit} onStatusChange={changeUnitStatus} units={units} />
+              <UnitsModule filter={unitFilter} onFilterChange={setUnitFilter} onRemoveUnit={removeUnit} onStatusChange={changeUnitStatus} onUpdateIdentifier={updateUnitIdentifier} units={units} />
             ) : null}
             {activeModule === "fire-ems" ? <FireEmsModule calls={calls} units={units} /> : null}
             {activeModule === "tow" ? <TowModule units={units} /> : null}
@@ -801,17 +847,28 @@ function DispatchLogin({ onSubmit }: { onSubmit: (session: DispatchSession) => v
 
 function CommandCenter({
   calls,
-  log,
+  onAssignUnit,
+  onAttachUnit,
   onCallSelect,
   onModuleChange,
+  onRemoveUnit,
+  onStatusChange,
+  onUnitStatusChange,
+  selectedCall,
   units,
 }: {
   calls: DispatchCall[];
-  log: DispatchLogEntry[];
+  onAssignUnit: (callId: string, unitIds: string[]) => void;
+  onAttachUnit: (callId: string, unitId: string) => void;
   onCallSelect: (id: string) => void;
   onModuleChange: (module: DispatchModule) => void;
+  onRemoveUnit: (callId: string, unitId: string) => void;
+  onStatusChange: (id: string, status: CallStatus) => void;
+  onUnitStatusChange: (id: string, status: DispatchUnit["status"]) => void;
+  selectedCall: DispatchCall | null;
   units: DispatchUnit[];
 }) {
+  const openCall = selectedCall ?? calls[0] ?? null;
   const alerts = [
     ...calls.filter((call) => call.priority === "Critical").map((call) => `${call.callNumber}: ${call.type}`),
     ...units.filter((unit) => unit.status === "Panic").map((unit) => `${unit.unit}: Panic`),
@@ -825,7 +882,9 @@ function CommandCenter({
               key={call.id}
               type="button"
               onClick={() => onCallSelect(call.id)}
-              className="grid w-full grid-cols-[0.8fr_0.6fr_1fr_0.8fr] gap-3 rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-left text-sm hover:bg-white/[0.06]"
+              className={`grid w-full grid-cols-[0.8fr_0.6fr_1fr_0.8fr] gap-3 rounded-md border px-3 py-2 text-left text-sm hover:bg-white/[0.06] ${
+                openCall?.id === call.id ? "border-sky-300/45 bg-sky-300/10" : "border-white/10 bg-neutral-950"
+              }`}
             >
               <span className="font-mono text-white">{call.callNumber}</span>
               <span className={`rounded border px-2 py-0.5 text-xs ${priorityClass(call.priority)}`}>{call.priority}</span>
@@ -845,11 +904,21 @@ function CommandCenter({
         </div>
       </Panel>
       <Panel title="Unit Status Monitor">
-        <CompactUnitTable units={units.slice(0, 10)} />
+        <UnitTable
+          activeCall={openCall}
+          compact
+          onAttachToCall={onAttachUnit}
+          onStatusChange={onUnitStatusChange}
+          units={units.slice(0, 10)}
+        />
       </Panel>
-      <Panel title="Recent Dispatch Log">
-        <LogList log={log.slice(0, 6)} />
-      </Panel>
+      <CommandCallDetail
+        call={openCall}
+        onAssignUnit={onAssignUnit}
+        onRemoveUnit={onRemoveUnit}
+        onStatusChange={onStatusChange}
+        units={units}
+      />
       <Panel title="Quick Actions" className="xl:col-span-2">
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <QuickAction label="Open Call Creation" onClick={() => onModuleChange("call-creation")} />
@@ -859,6 +928,108 @@ function CommandCenter({
         </div>
       </Panel>
     </div>
+  );
+}
+
+function CommandCallDetail({
+  call,
+  onAssignUnit,
+  onRemoveUnit,
+  onStatusChange,
+  units,
+}: {
+  call: DispatchCall | null;
+  onAssignUnit: (callId: string, unitIds: string[]) => void;
+  onRemoveUnit: (callId: string, unitId: string) => void;
+  onStatusChange: (id: string, status: CallStatus) => void;
+  units: DispatchUnit[];
+}) {
+  const [assignmentSelection, setAssignmentSelection] = useState<{ callId: string; unitIds: string[] }>({ callId: "", unitIds: [] });
+
+  if (!call) {
+    return <Panel title="Selected Call"><UnderConstruction text="Select a call from the compact queue to review details and assign units." /></Panel>;
+  }
+
+  const assignedUnits = units.filter((unit) => call.assignedUnits.includes(unit.unit));
+  const availableUnits = units.filter((unit) => !call.assignedUnits.includes(unit.unit));
+  const selectedUnitIds = assignmentSelection.callId === call.id ? assignmentSelection.unitIds : [];
+  const toggleUnit = (unitId: string) => {
+    setAssignmentSelection((current) => {
+      const currentUnitIds = current.callId === call.id ? current.unitIds : [];
+      return {
+        callId: call.id,
+        unitIds: currentUnitIds.includes(unitId) ? currentUnitIds.filter((id) => id !== unitId) : [...currentUnitIds, unitId],
+      };
+    });
+  };
+
+  return (
+    <Panel title={`${call.callNumber} Assignment`}>
+      <div className="space-y-4">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Info label="Incident" value={`${call.type} / ${call.priority}`} />
+          <Info label="Location" value={`${call.location}${call.postal ? ` / ${call.postal}` : ""}`} />
+          <Info label="Caller" value={`${call.callerName || "Unknown"} / ${call.callerNumber || "No phone"}`} />
+          <label className="block rounded-md border border-white/10 bg-neutral-950 p-3">
+            <span className="text-xs text-neutral-500">Status</span>
+            <select
+              value={call.status}
+              onChange={(event) => onStatusChange(call.id, event.target.value as CallStatus)}
+              className="mt-2 h-9 w-full rounded border border-white/10 bg-neutral-900 px-2 text-sm text-white"
+            >
+              {callStatuses.map((status) => <option key={status}>{status}</option>)}
+            </select>
+          </label>
+        </div>
+        <p className="text-sm leading-6 text-neutral-300">{call.narrative}</p>
+
+        <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-neutral-500">Assign Units</p>
+            <button
+              type="button"
+              disabled={!selectedUnitIds.length}
+              onClick={() => {
+                onAssignUnit(call.id, selectedUnitIds);
+                setAssignmentSelection({ callId: call.id, unitIds: [] });
+              }}
+              className="min-h-9 rounded-md bg-sky-400 px-3 text-xs font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Assign Selected
+            </button>
+          </div>
+          <div className="mt-3 grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+            {availableUnits.length ? availableUnits.map((unit) => (
+              <label key={unit.id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded border border-white/10 bg-neutral-900 px-2 text-sm text-neutral-200 hover:bg-white/[0.06]">
+                <input type="checkbox" checked={selectedUnitIds.includes(unit.id)} onChange={() => toggleUnit(unit.id)} />
+                <span className="font-mono">{unit.unit}</span>
+                <span className={`ml-auto rounded border px-2 py-0.5 text-xs ${statusClass(unit.status)}`}>{unit.status}</span>
+              </label>
+            )) : <p className="text-sm text-neutral-500">Every visible unit is already assigned.</p>}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+          <p className="text-xs uppercase tracking-[0.16em] text-neutral-500">Attached Units</p>
+          <div className="mt-3 space-y-2">
+            {assignedUnits.length ? assignedUnits.map((unit) => (
+              <div key={unit.id} className="grid grid-cols-[1fr_auto] items-center gap-2 rounded border border-white/10 bg-neutral-900 px-2 py-2 text-sm">
+                <span className="font-mono text-neutral-200">{unit.unit}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${unit.unit} from ${call.callNumber}`}
+                  title={`Remove ${unit.unit} from call`}
+                  onClick={() => onRemoveUnit(call.id, unit.id)}
+                  className="grid size-8 place-items-center rounded border border-white/15 text-neutral-300 hover:bg-white/10"
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            )) : <p className="text-sm text-neutral-500">No units assigned yet.</p>}
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -872,7 +1043,7 @@ function ActiveCallsModule({
   units,
 }: {
   calls: DispatchCall[];
-  onAssignUnit: (callId: string, unitId: string) => void;
+  onAssignUnit: (callId: string, unitIds: string[]) => void;
   onCallSelect: (id: string) => void;
   onRemoveUnit: (callId: string, unitId: string) => void;
   onStatusChange: (id: string, status: CallStatus) => void;
@@ -916,15 +1087,25 @@ function CallDetailDrawer({
   units,
 }: {
   call: DispatchCall | null;
-  onAssignUnit: (callId: string, unitId: string) => void;
+  onAssignUnit: (callId: string, unitIds: string[]) => void;
   onRemoveUnit: (callId: string, unitId: string) => void;
   onStatusChange: (id: string, status: CallStatus) => void;
   units: DispatchUnit[];
 }) {
-  const [unitToAssign, setUnitToAssign] = useState("");
+  const [assignmentSelection, setAssignmentSelection] = useState<{ callId: string; unitIds: string[] }>({ callId: "", unitIds: [] });
   if (!call) return <Panel title="Call Detail"><UnderConstruction text="Select a call to open the detail drawer." /></Panel>;
   const assignedUnits = units.filter((unit) => call.assignedUnits.includes(unit.unit));
   const availableUnits = units.filter((unit) => !call.assignedUnits.includes(unit.unit));
+  const selectedUnitIds = assignmentSelection.callId === call.id ? assignmentSelection.unitIds : [];
+  const toggleUnit = (unitId: string) => {
+    setAssignmentSelection((current) => {
+      const currentUnitIds = current.callId === call.id ? current.unitIds : [];
+      return {
+        callId: call.id,
+        unitIds: currentUnitIds.includes(unitId) ? currentUnitIds.filter((id) => id !== unitId) : [...currentUnitIds, unitId],
+      };
+    });
+  };
   return (
     <Panel title={`${call.callNumber} Detail`}>
       <div className="space-y-4">
@@ -950,28 +1131,42 @@ function CallDetailDrawer({
         </label>
         <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
           <p className="text-xs uppercase tracking-[0.16em] text-neutral-500">Unit Assignment</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
-            <select value={unitToAssign} onChange={(event) => setUnitToAssign(event.target.value)} className="h-10 rounded-md border border-white/10 bg-neutral-900 px-2 text-sm text-white">
-              <option value="">Select unit</option>
-              {availableUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unit} / {unit.status}</option>)}
-            </select>
+          <div className="mt-3 max-h-44 space-y-2 overflow-y-auto pr-1">
+            {availableUnits.length ? availableUnits.map((unit) => (
+              <label key={unit.id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded border border-white/10 bg-neutral-900 px-2 text-sm text-neutral-200 hover:bg-white/[0.06]">
+                <input type="checkbox" checked={selectedUnitIds.includes(unit.id)} onChange={() => toggleUnit(unit.id)} />
+                <span className="font-mono">{unit.unit}</span>
+                <span className={`ml-auto rounded border px-2 py-0.5 text-xs ${statusClass(unit.status)}`}>{unit.status}</span>
+              </label>
+            )) : <p className="text-sm text-neutral-500">No unassigned units available.</p>}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!unitToAssign}
+              disabled={!selectedUnitIds.length}
               onClick={() => {
-                onAssignUnit(call.id, unitToAssign);
-                setUnitToAssign("");
+                onAssignUnit(call.id, selectedUnitIds);
+                setAssignmentSelection({ callId: call.id, unitIds: [] });
               }}
               className="min-h-10 rounded-md bg-sky-400 px-3 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Assign
+              Assign Selected
             </button>
+            <button type="button" onClick={() => setAssignmentSelection({ callId: call.id, unitIds: [] })} className="min-h-10 rounded-md border border-white/15 px-3 text-sm text-neutral-300 hover:bg-white/10">Clear Selection</button>
           </div>
           <div className="mt-3 space-y-2">
             {assignedUnits.length ? assignedUnits.map((unit) => (
               <div key={unit.id} className="flex items-center justify-between gap-2 rounded border border-white/10 bg-neutral-900 px-2 py-2 text-sm">
                 <span className="font-mono text-neutral-200">{unit.unit}</span>
-                <button onClick={() => onRemoveUnit(call.id, unit.id)} className="rounded border border-white/15 px-2 py-1 text-xs text-neutral-300 hover:bg-white/10">Remove</button>
+                <button
+                  type="button"
+                  aria-label={`Remove ${unit.unit} from ${call.callNumber}`}
+                  title={`Remove ${unit.unit} from call`}
+                  onClick={() => onRemoveUnit(call.id, unit.id)}
+                  className="grid size-8 place-items-center rounded border border-white/15 text-neutral-300 hover:bg-white/10"
+                >
+                  <TrashIcon />
+                </button>
               </div>
             )) : <p className="text-sm text-neutral-500">No units assigned.</p>}
           </div>
@@ -1033,14 +1228,17 @@ function UnitsModule({
   onFilterChange,
   onRemoveUnit,
   onStatusChange,
+  onUpdateIdentifier,
   units,
 }: {
   filter: string;
   onFilterChange: (filter: string) => void;
   onRemoveUnit: (id: string) => void;
   onStatusChange: (id: string, status: DispatchUnit["status"]) => void;
+  onUpdateIdentifier: (id: string, callsign: string) => void;
   units: DispatchUnit[];
 }) {
+  const [selectedUnitId, setSelectedUnitId] = useState("");
   const filters = ["All", "Law Enforcement", "Fire", "EMS", "Tow", "Available", "Emergency"];
   const filtered = units.filter((unit) => {
     if (filter === "All") return true;
@@ -1048,68 +1246,180 @@ function UnitsModule({
     if (filter === "Available") return unit.status === "Available";
     return unit.type === filter;
   });
+  const selectedUnit = filtered.find((unit) => unit.id === selectedUnitId) ?? filtered[0] ?? null;
   return (
-    <Panel title="Unit Status Monitor">
-      <div className="mb-3 flex flex-wrap gap-2">
-        {filters.map((item) => (
-          <button key={item} onClick={() => onFilterChange(item)} className={`rounded-md border px-3 py-1 text-xs ${filter === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>
-            {item}
-          </button>
-        ))}
-      </div>
-      <UnitTable units={filtered} onRemoveUnit={onRemoveUnit} onStatusChange={onStatusChange} />
+    <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+      <Panel title="Unit Status Monitor">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {filters.map((item) => (
+            <button key={item} onClick={() => onFilterChange(item)} className={`rounded-md border px-3 py-1 text-xs ${filter === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>
+              {item}
+            </button>
+          ))}
+        </div>
+        <UnitTable
+          onRemoveUnit={onRemoveUnit}
+          onStatusChange={onStatusChange}
+          onUnitSelect={setSelectedUnitId}
+          selectedUnitId={selectedUnit?.id ?? ""}
+          units={filtered}
+        />
+      </Panel>
+      <UnitDetailPanel onUpdateIdentifier={onUpdateIdentifier} unit={selectedUnit} />
+    </div>
+  );
+}
+
+function UnitDetailPanel({
+  onUpdateIdentifier,
+  unit,
+}: {
+  onUpdateIdentifier: (id: string, callsign: string) => void;
+  unit: DispatchUnit | null;
+}) {
+  if (!unit) {
+    return <Panel title="Unit Detail"><UnderConstruction text="Select a unit to view roster details." /></Panel>;
+  }
+
+  return <UnitDetailForm key={unit.id} onUpdateIdentifier={onUpdateIdentifier} unit={unit} />;
+}
+
+function UnitDetailForm({
+  onUpdateIdentifier,
+  unit,
+}: {
+  onUpdateIdentifier: (id: string, callsign: string) => void;
+  unit: DispatchUnit;
+}) {
+  const [callsign, setCallsign] = useState(unit.unit);
+
+  return (
+    <Panel title={`${unit.unit} Detail`}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onUpdateIdentifier(unit.id, callsign);
+        }}
+        className="space-y-4"
+      >
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Unit Identifier</span>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+            <input
+              value={callsign}
+              onChange={(event) => setCallsign(event.target.value.toUpperCase())}
+              className="h-10 rounded-md border border-white/10 bg-neutral-950 px-3 font-mono text-sm text-white"
+            />
+            <button type="submit" className="min-h-10 rounded-md bg-sky-400 px-3 text-sm font-semibold text-neutral-950 hover:bg-sky-300">Save</button>
+          </div>
+        </label>
+        <div className="grid gap-2 text-sm">
+          <Info label="Member" value={unit.memberName || "No member name"} />
+          <Info label="Agency" value={`${unit.agency} / ${unit.type}`} />
+          <Info label="Specialty" value={unit.specialty || "No specialty"} />
+          <Info label="Status" value={unit.status} />
+          <Info label="Location" value={unit.location || "No location"} />
+          <Info label="Assigned Call" value={unit.assignedCall || "None"} />
+          <Info label="Last Update" value={unit.lastUpdate} />
+        </div>
+      </form>
     </Panel>
   );
 }
 
 function UnitTable({
+  activeCall,
+  compact = false,
+  onAttachToCall,
   onRemoveUnit,
   onStatusChange,
+  onUnitSelect,
+  selectedUnitId = "",
   units,
 }: {
+  activeCall?: DispatchCall | null;
+  compact?: boolean;
+  onAttachToCall?: (callId: string, unitId: string) => void;
   onRemoveUnit?: (id: string) => void;
   onStatusChange?: (id: string, status: DispatchUnit["status"]) => void;
+  onUnitSelect?: (id: string) => void;
+  selectedUnitId?: string;
   units: DispatchUnit[];
 }) {
+  const columns = compact ? ["Unit", "Status", "Call", "Actions"] : ["Unit", "Agency", "Type", "Status", "Location", "Assigned Call", "Last Update", "Actions"];
+  const rowGrid = compact
+    ? "grid-cols-[0.9fr_1fr_0.9fr_1.1fr]"
+    : "grid-cols-[0.7fr_0.8fr_0.8fr_1fr_0.9fr_0.9fr_0.7fr_1.2fr]";
+
   return (
     <div className="overflow-hidden rounded-md border border-white/10">
-      <TableHeader columns={["Unit", "Agency", "Type", "Status", "Location", "Assigned Call", "Last Update", "Actions"]} />
-      {units.map((unit) => (
-        <div key={unit.id} className="grid grid-cols-[0.7fr_0.8fr_1fr_0.9fr_0.9fr_0.9fr_0.7fr_1fr] gap-3 border-t border-white/10 px-3 py-2 text-xs">
-          <span className="font-mono text-white">{unit.unit}</span>
-          <span className="text-neutral-300">{unit.agency}</span>
-          <span className="text-neutral-400">{unit.type}</span>
-          <span className={`rounded border px-2 py-0.5 ${statusClass(unit.status)}`}>{unit.status}</span>
-          <span className="text-neutral-400">{unit.location}</span>
-          <span className="text-neutral-300">{unit.assignedCall}</span>
-          <span className="text-neutral-400">{unit.lastUpdate}</span>
-          {onStatusChange ? (
-            <div className="flex flex-col gap-1">
-              {(unit.status === "Panic" || unit.status === "Signal 100") ? (
+      <div className={`grid ${rowGrid} gap-3 bg-neutral-950 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-neutral-500`}>
+        {columns.map((column) => <span key={column}>{column}</span>)}
+      </div>
+      {units.map((unit) => {
+        const canAttach = Boolean(activeCall && !activeCall.assignedUnits.includes(unit.unit));
+        return (
+          <div key={unit.id} className={`grid ${rowGrid} gap-3 border-t border-white/10 px-3 py-2 text-xs ${selectedUnitId === unit.id ? "bg-sky-300/10" : ""}`}>
+            <button
+              type="button"
+              onClick={() => onUnitSelect?.(unit.id)}
+              className="truncate text-left font-mono text-white hover:text-sky-200"
+              title="View unit details"
+            >
+              {unit.unit}
+            </button>
+            {!compact ? <span className="truncate text-neutral-300">{unit.agency}</span> : null}
+            {!compact ? <span className="truncate text-neutral-400">{unit.type}</span> : null}
+            <span className={`truncate rounded border px-2 py-0.5 ${statusClass(unit.status)}`}>{unit.status}</span>
+            {!compact ? <span className="truncate text-neutral-400">{unit.location}</span> : null}
+            <span className="truncate text-neutral-300">{unit.assignedCall}</span>
+            {!compact ? <span className="truncate text-neutral-400">{unit.lastUpdate}</span> : null}
+            <div className="flex min-w-0 items-center gap-1">
+              {onStatusChange ? (
+                <select
+                  aria-label={`${unit.unit} status`}
+                  value={unit.status}
+                  onChange={(event) => onStatusChange(unit.id, event.target.value as DispatchUnit["status"])}
+                  className="h-8 min-w-0 flex-1 rounded border border-white/10 bg-neutral-950 px-1 text-[11px] text-neutral-200"
+                >
+                  {unitStatuses.map((status) => <option key={status}>{status}</option>)}
+                </select>
+              ) : <span className="text-neutral-500">Monitor</span>}
+              {onStatusChange && (unit.status === "Panic" || unit.status === "Signal 100") ? (
                 <button
                   type="button"
+                  title="Clear panic"
                   onClick={() => onStatusChange(unit.id, "Available")}
-                  className="rounded border border-emerald-300/30 bg-emerald-300/10 px-2 py-1 text-emerald-100 hover:bg-emerald-300/20"
+                  className="grid size-8 shrink-0 place-items-center rounded border border-emerald-300/30 bg-emerald-300/10 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-300/20"
                 >
-                  Clear Panic
+                  Clear
                 </button>
               ) : null}
-              <select value={unit.status} onChange={(event) => onStatusChange(unit.id, event.target.value as DispatchUnit["status"])} className="rounded border border-white/10 bg-neutral-950 px-2 text-neutral-200">
-                {["Available", "Assigned", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"].map((status) => <option key={status}>{status}</option>)}
-              </select>
+              {activeCall && onAttachToCall ? (
+                <button
+                  type="button"
+                  disabled={!canAttach}
+                  onClick={() => activeCall ? onAttachToCall(activeCall.id, unit.id) : undefined}
+                  className="h-8 shrink-0 rounded border border-sky-300/30 bg-sky-300/10 px-2 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {canAttach ? "Attach" : "On"}
+                </button>
+              ) : null}
               {onRemoveUnit ? (
                 <button
                   type="button"
+                  aria-label={`Remove ${unit.unit}`}
+                  title={`Remove ${unit.unit}`}
                   onClick={() => onRemoveUnit(unit.id)}
-                  className="rounded border border-rose-300/30 bg-rose-400/10 px-2 py-1 text-rose-100 hover:bg-rose-400/20"
+                  className="grid size-8 shrink-0 place-items-center rounded border border-rose-300/30 bg-rose-400/10 text-rose-100 hover:bg-rose-400/20"
                 >
-                  Remove Unit
+                  <TrashIcon />
                 </button>
               ) : null}
             </div>
-          ) : <span className="text-neutral-500">Monitor</span>}
-        </div>
-      ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1379,6 +1689,17 @@ function UnderConstruction({ text }: { text: string }) {
 
 function QuickAction({ label, onClick }: { label: string; onClick: () => void }) {
   return <button onClick={onClick} className="min-h-12 rounded-md border border-sky-300/25 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100 hover:bg-sky-300/20">{label}</button>;
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 7h14" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10 11v6M14 11v6" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 7l1-2h4l1 2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7l1 13h8l1-13" />
+    </svg>
+  );
 }
 
 function Pill({ children, critical = false }: { children: React.ReactNode; critical?: boolean }) {
