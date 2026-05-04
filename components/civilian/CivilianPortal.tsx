@@ -2,20 +2,23 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
-import { emptyRecordCategories, mockCivilianCharacters } from "./mockCivilianData";
+import {
+  createCivilianProfile,
+  createCivilianVehicle,
+  loadCivilianProfiles,
+  saveCivilianLicense,
+  updateCivilianProfile,
+} from "@/app/_lib/cad-data";
+import { emptyRecordCategories } from "./mockCivilianData";
 import {
   DEFAULT_CIVILIAN_PROFILE_LIMIT,
   licenseStatuses,
   licenseTypes,
   type CivilianFormState,
-  type CivilianLicense,
   type CivilianProfile,
-  type CivilianVehicle,
   type LicenseStatus,
   type LicenseType,
 } from "./types";
-
-const storageKey = "sentinel-civilian-portal-state";
 
 const blankCharacterForm: CivilianFormState = {
   first_name: "",
@@ -57,19 +60,6 @@ const sections: { id: PortalSection; label: string }[] = [
   { id: "settings", label: "Settings" },
 ];
 
-function makeId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
-}
-
-function buildDefaultLicenses(civilianId: string): CivilianLicense[] {
-  return licenseTypes.map((licenseType) => ({
-    id: makeId("lic"),
-    civilian_id: civilianId,
-    license_type: licenseType,
-    status: "None",
-  }));
-}
-
 function fullName(character: CivilianProfile) {
   return `${character.first_name} ${character.last_name}`.trim() || "Unnamed Civilian";
 }
@@ -99,44 +89,50 @@ function statusClass(status: string) {
 }
 
 export function CivilianPortal() {
-  const [characters, setCharacters] = useState<CivilianProfile[]>(mockCivilianCharacters);
-  const [activeCharacterId, setActiveCharacterId] = useState(mockCivilianCharacters[0]?.id ?? "");
+  const [characters, setCharacters] = useState<CivilianProfile[]>([]);
+  const [activeCharacterId, setActiveCharacterId] = useState("");
   const [activeSection, setActiveSection] = useState<PortalSection>("characters");
   const [ownerId, setOwnerId] = useState("mock-user-local-session");
   const [hydrated, setHydrated] = useState(false);
   const [form, setForm] = useState<CivilianFormState>(blankCharacterForm);
   const [vehicleForm, setVehicleForm] = useState(blankVehicle);
-  const [notice, setNotice] = useState("Awaiting Supabase/FiveM integration");
+  const [notice, setNotice] = useState("Loading Supabase civilian records...");
+  const [isSaving, setIsSaving] = useState(false);
+  const [dataMode, setDataMode] = useState("Supabase");
 
   useEffect(() => {
     queueMicrotask(async () => {
       const supabase = getSupabaseBrowserClient();
-      const userResult = await supabase?.auth.getUser();
+      if (!supabase) {
+        setNotice("Supabase is not configured. Add the public URL and anon key to enable records.");
+        setDataMode("Offline");
+        setHydrated(true);
+        return;
+      }
+
+      const userResult = await supabase.auth.getUser();
       const nextOwnerId = userResult?.data.user?.id ?? "mock-user-local-session";
       setOwnerId(nextOwnerId);
 
-      const stored = window.localStorage.getItem(storageKey);
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as CivilianProfile[];
-          setCharacters(parsed);
-          setActiveCharacterId(parsed[0]?.id ?? "");
-        } catch {
-          window.localStorage.removeItem(storageKey);
-        }
-      } else if (nextOwnerId !== "mock-user-local-session") {
-        setCharacters((current) => current.map((character) => ({ ...character, owner_id: nextOwnerId })));
+      if (!userResult?.data.user) {
+        setNotice("Sign in to load and save civilian records through Supabase.");
+        setDataMode("Signed out");
+        setHydrated(true);
+        return;
+      }
+
+      try {
+        const profiles = await loadCivilianProfiles(supabase, nextOwnerId);
+        setCharacters(profiles);
+        setActiveCharacterId(profiles[0]?.id ?? "");
+        setNotice(profiles.length ? "Civilian records synced with Supabase." : "No civilian profiles found in Supabase yet.");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not load civilian records from Supabase.");
       }
 
       setHydrated(true);
     });
   }, []);
-
-  useEffect(() => {
-    if (hydrated) {
-      window.localStorage.setItem(storageKey, JSON.stringify(characters));
-    }
-  }, [characters, hydrated]);
 
   const activeCharacter = useMemo(
     () => characters.find((character) => character.id === activeCharacterId) ?? characters[0] ?? null,
@@ -154,50 +150,58 @@ export function CivilianPortal() {
     setCharacters((current) => current.map((character) => (character.id === activeCharacter.id ? { ...character, ...patch } : character)));
   }
 
-  function createCharacter(event: FormEvent<HTMLFormElement>) {
+  async function createCharacter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (profileLimitReached) {
       setNotice("Civilian profile limit reached.");
       return;
     }
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase || ownerId === "mock-user-local-session") {
+      setNotice("Sign in with Supabase before creating a civilian profile.");
+      return;
+    }
 
-    const civilianId = makeId("civ");
-    const nextCharacter: CivilianProfile = {
-      id: civilianId,
-      owner_id: ownerId,
-      ...form,
-      images: {
-        profile_photo_url: form.profile_image_url,
-        driver_license_photo_url: "",
-        vehicle_registration_photo_url: "",
-        mugshot_url: "",
-      },
-      licenses: buildDefaultLicenses(civilianId),
-      records: [],
-      vehicles: [],
-    };
-
-    // These records are intended to be searchable by officer MDT and dispatch lookup modules.
-    setCharacters((current) => [...current, nextCharacter]);
-    setActiveCharacterId(civilianId);
-    setActiveSection("details");
-    setForm(formFromCharacter(nextCharacter));
-    setNotice("Character saved locally. Supabase persistence is Awaiting Supabase/FiveM integration.");
+    setIsSaving(true);
+    try {
+      const nextCharacter = await createCivilianProfile(supabase, ownerId, form);
+      const profiles = await loadCivilianProfiles(supabase, ownerId);
+      setCharacters(profiles);
+      setActiveCharacterId(nextCharacter.id);
+      setActiveSection("details");
+      setForm(formFromCharacter(nextCharacter));
+      setNotice("Character saved to Supabase and available to authorized dispatch/officer lookups.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not create civilian profile.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
-  function saveCharacterDetails(event: FormEvent<HTMLFormElement>) {
+  async function saveCharacterDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeCharacter) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setNotice("Supabase is not configured.");
+      return;
+    }
 
-    updateActiveCharacter({
-      ...form,
-      profile_image_url: form.profile_image_url,
-      images: {
-        ...activeCharacter.images,
-        profile_photo_url: form.profile_image_url,
-      },
-    });
-    setNotice("Character details updated locally. Awaiting Supabase/FiveM integration.");
+    setIsSaving(true);
+    try {
+      const updated = await updateCivilianProfile(supabase, activeCharacter.id, form);
+      updateActiveCharacter({
+        ...updated,
+        licenses: activeCharacter.licenses,
+        records: activeCharacter.records,
+        vehicles: activeCharacter.vehicles,
+      });
+      setNotice("Character details saved to Supabase.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not save character details.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   function loadCharacterIntoForm(character: CivilianProfile) {
@@ -210,24 +214,38 @@ export function CivilianPortal() {
     setActiveSection("details");
   }
 
-  function updateLicense(licenseType: LicenseType, status: LicenseStatus) {
+  async function updateLicense(licenseType: LicenseType, status: LicenseStatus) {
     if (!activeCharacter) return;
-    // TODO: Officer/admin systems should later suspend, revoke, and update license enforcement.
-    const licenses = activeCharacter.licenses.map((license) =>
-      license.license_type === licenseType ? { ...license, status } : license,
-    );
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setNotice("Supabase is not configured.");
+      return;
+    }
+
+    const previousLicenses = activeCharacter.licenses;
+    const licenses = previousLicenses.map((license) => (license.license_type === licenseType ? { ...license, status } : license));
     updateActiveCharacter({ licenses });
-    setNotice("License setup saved locally. Officer/admin enforcement is Under Construction.");
+    try {
+      await saveCivilianLicense(supabase, activeCharacter.id, licenseType, status);
+      setNotice("License setup saved to Supabase.");
+    } catch (error) {
+      updateActiveCharacter({ licenses: previousLicenses });
+      setNotice(error instanceof Error ? error.message : "Could not save license status.");
+    }
   }
 
-  function createVehicle(event: FormEvent<HTMLFormElement>) {
+  async function createVehicle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeCharacter) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase || ownerId === "mock-user-local-session") {
+      setNotice("Sign in with Supabase before adding a vehicle.");
+      return;
+    }
 
-    const nextVehicle: CivilianVehicle = {
-      id: makeId("veh"),
-      civilian_id: activeCharacter.id,
-      owner_id: ownerId,
+    setIsSaving(true);
+    try {
+      const nextVehicle = await createCivilianVehicle(supabase, ownerId, activeCharacter.id, {
       plate: vehicleForm.plate.trim().toUpperCase(),
       make: vehicleForm.make,
       model: vehicleForm.model,
@@ -237,12 +255,16 @@ export function CivilianPortal() {
       insurance_status: vehicleForm.insurance_status,
       registration_status: vehicleForm.registration_status,
       notes: vehicleForm.notes,
-    };
+      });
 
-    // These records are intended to be searchable by officer MDT and dispatch lookup modules.
-    updateActiveCharacter({ vehicles: [...activeCharacter.vehicles, nextVehicle] });
-    setVehicleForm(blankVehicle);
-    setNotice("Vehicle added locally. Officer plate lookup connection is Awaiting Supabase/FiveM integration.");
+      updateActiveCharacter({ vehicles: [...activeCharacter.vehicles, nextVehicle] });
+      setVehicleForm(blankVehicle);
+      setNotice("Vehicle added to Supabase and available for authorized plate lookups.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not add vehicle.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   if (!hydrated) {
@@ -263,7 +285,7 @@ export function CivilianPortal() {
           <div className="grid gap-2 text-sm sm:grid-cols-3">
             <Metric label="Profiles" value={`${characters.length}/${DEFAULT_CIVILIAN_PROFILE_LIMIT}`} />
             <Metric label="Owner ID" value={ownerId === "mock-user-local-session" ? "Local session" : ownerId.slice(0, 8)} />
-            <Metric label="Data Mode" value="Mock/local" />
+            <Metric label="Data Mode" value={dataMode} />
           </div>
         </div>
         <Notice text={profileLimitReached ? "Civilian profile limit reached." : notice} />
@@ -317,8 +339,8 @@ export function CivilianPortal() {
                 form={form}
                 onChange={updateForm}
                 onSubmit={createCharacter}
-                submitLabel="Create Character"
-                disabled={profileLimitReached}
+                submitLabel={isSaving ? "Saving..." : "Create Character"}
+                disabled={profileLimitReached || isSaving}
               />
               {profileLimitReached ? <Notice text="Civilian profile limit reached." /> : null}
             </Panel>
@@ -330,7 +352,7 @@ export function CivilianPortal() {
                 <>
                   <CharacterSummary character={activeCharacter} />
                   <div className="mt-5 border-t border-white/10 pt-5">
-                    <CharacterForm form={form} onChange={updateForm} onSubmit={saveCharacterDetails} submitLabel="Save Details" />
+                    <CharacterForm form={form} onChange={updateForm} onSubmit={saveCharacterDetails} submitLabel={isSaving ? "Saving..." : "Save Details"} disabled={isSaving} />
                   </div>
                 </>
               ) : (
@@ -376,8 +398,8 @@ export function CivilianPortal() {
             <Panel title="Settings">
               <div className="grid gap-3 md:grid-cols-2">
                 <Info label="Profile Limit" value={`${DEFAULT_CIVILIAN_PROFILE_LIMIT} default civilian profiles`} />
-                <Info label="Storage" value="Local browser state until Supabase is connected" />
-                <Info label="Officer Lookup" value="Awaiting Supabase/FiveM integration" />
+                <Info label="Storage" value="Supabase civilian_profiles, civilian_licenses, and civilian_vehicles" />
+                <Info label="Officer Lookup" value="Available to authorized staff through Supabase RLS" />
                 <Info label="Admin Limits" value="Under Construction" />
               </div>
             </Panel>
@@ -402,7 +424,7 @@ function CharacterList({
   return (
     <Panel title="My Characters">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-neutral-400">Civilian profiles are owned by the logged-in user and stored locally until Supabase persistence is connected.</p>
+        <p className="text-sm text-neutral-400">Civilian profiles are owned by the logged-in user and saved in Supabase for authorized CAD/MDT lookup.</p>
         <button
           type="button"
           onClick={onCreate}

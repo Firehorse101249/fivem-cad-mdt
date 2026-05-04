@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  createBolo,
+  createDispatchCall,
+  loadDispatchData,
+  searchCadRecords,
+  updateDispatchCallStatus,
+  updateDispatchUnitStatus,
+  type CadLookupResult,
+} from "@/app/_lib/cad-data";
+import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
 import {
   incidentTypes,
   initialCallForm,
-  mockBolos,
-  mockCalls,
-  mockLog,
-  mockUnits,
 } from "./mockDispatchData";
 import { toneConfig } from "./toneConfig";
 import type {
@@ -68,10 +74,12 @@ function statusClass(status: string) {
 
 export function DispatchWorkstation() {
   const [activeModule, setActiveModule] = useState<DispatchModule>("command-center");
-  const [calls, setCalls] = useState<DispatchCall[]>(mockCalls);
-  const [units, setUnits] = useState<DispatchUnit[]>(mockUnits);
-  const [bolos, setBolos] = useState<Bolo[]>(mockBolos);
-  const [log, setLog] = useState<DispatchLogEntry[]>(mockLog);
+  const [calls, setCalls] = useState<DispatchCall[]>([]);
+  const [units, setUnits] = useState<DispatchUnit[]>([]);
+  const [bolos, setBolos] = useState<Bolo[]>([]);
+  const [log, setLog] = useState<DispatchLogEntry[]>([
+    { actor: "SYSTEM", id: "log-boot", message: "Dispatch workstation ready for Supabase sync.", timestamp: nowTime() },
+  ]);
   const [selectedCallId, setSelectedCallId] = useState(calls[0]?.id ?? "");
   const [callForm, setCallForm] = useState<CallFormState>(initialCallForm);
   const [unitFilter, setUnitFilter] = useState("All");
@@ -80,9 +88,59 @@ export function DispatchWorkstation() {
   const [playingTone, setPlayingTone] = useState("");
   const [toneError, setToneError] = useState("");
   const [volume, setVolume] = useState(0.65);
+  const [userId, setUserId] = useState("");
+  const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
+  const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? null;
+
+  const refreshDispatchData = useCallback(async (nextSelectedCallId = "") => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSyncNotice("Supabase is not configured. Dispatch data cannot sync yet.");
+      return;
+    }
+
+    const data = await loadDispatchData(supabase);
+    setCalls(data.calls);
+    setUnits(data.units);
+    setBolos(data.bolos);
+    setSelectedCallId((current) => nextSelectedCallId || current || data.calls[0]?.id || "");
+    setSyncNotice("Dispatch calls, units, and BOLOs are synced with Supabase.");
+  }, []);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      queueMicrotask(() => setSyncNotice("Supabase is not configured. Dispatch data cannot sync yet."));
+      return;
+    }
+
+    let active = true;
+    queueMicrotask(async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!active) return;
+      setUserId(data.user?.id ?? "");
+      try {
+        await refreshDispatchData();
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : "Could not load Supabase dispatch data.");
+      }
+    });
+
+    const channel = supabase
+      .channel("dispatch-workstation-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_calls" }, () => void refreshDispatchData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_units" }, () => void refreshDispatchData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "bolos" }, () => void refreshDispatchData())
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [refreshDispatchData]);
 
   function addLog(message: string, related?: string, actor = "DISP-01") {
     setLog((current) => [
@@ -91,8 +149,13 @@ export function DispatchWorkstation() {
     ]);
   }
 
-  function updateCallStatus(callId: string, status: CallStatus) {
+  async function updateCallStatus(callId: string, status: CallStatus) {
+    const supabase = getSupabaseBrowserClient();
     const call = calls.find((item) => item.id === callId);
+    if (!supabase || !call) {
+      setSyncNotice("Supabase is not available for call status updates.");
+      return;
+    }
     setCalls((current) =>
       current.map((item) =>
         item.id === callId
@@ -104,59 +167,87 @@ export function DispatchWorkstation() {
           : item,
       ),
     );
-    addLog(`Call status changed to ${status}.`, call?.callNumber);
+    try {
+      await updateDispatchCallStatus(supabase, call, status);
+      addLog(`Call status changed to ${status}.`, call.callNumber);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not update call status.");
+      await refreshDispatchData(callId);
+    }
   }
 
-  function createCall(event: FormEvent<HTMLFormElement>) {
+  async function createCall(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const callNumber = `C-2026-${String(calls.length + 145).padStart(4, "0")}`;
-    const newCall: DispatchCall = {
-      ...callForm,
-      age: "0m",
-      assignedUnits: [],
-      callNumber,
-      id: makeId("call"),
-      notes: ["Initial call created from dispatch workstation."],
-      openedAt: nowTime(),
-      status: "Pending",
-      timeline: [`${nowTime()} call opened`],
-    };
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSyncNotice("Supabase is not configured. Cannot open the call.");
+      return;
+    }
 
-    setCalls((current) => [newCall, ...current]);
-    setSelectedCallId(newCall.id);
-    setCallForm(initialCallForm);
-    setActiveModule("active-calls");
-    addLog(`Call opened: ${newCall.type} at ${newCall.location}.`, callNumber);
+    try {
+      const newCall = await createDispatchCall(supabase, callForm, userId);
+      setCalls((current) => [newCall, ...current]);
+      setSelectedCallId(newCall.id);
+      setCallForm(initialCallForm);
+      setActiveModule("active-calls");
+      addLog(`Call opened: ${newCall.type} at ${newCall.location}.`, newCall.callNumber);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not create dispatch call.");
+    }
   }
 
-  function addBolo(event: FormEvent<HTMLFormElement>) {
+  async function addBolo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSyncNotice("Supabase is not configured. Cannot add BOLO.");
+      return;
+    }
+    const formElement = event.currentTarget;
     const form = new FormData(event.currentTarget);
     const title = String(form.get("title") ?? "");
-    const newBolo: Bolo = {
-      associated: String(form.get("associated") ?? ""),
-      createdAt: nowTime(),
-      createdBy: "DISP-01",
-      description: String(form.get("description") ?? ""),
-      id: makeId("bolo"),
-      lastKnownLocation: String(form.get("location") ?? ""),
-      priority: String(form.get("priority") ?? "Medium") as Priority,
-      status: "Active",
-      title,
-      type: String(form.get("type") ?? "Person") as BoloType,
-    };
 
-    setBolos((current) => [newBolo, ...current]);
-    addLog(`BOLO added: ${title}.`, title);
-    event.currentTarget.reset();
+    try {
+      const newBolo = await createBolo(supabase, form, userId);
+      setBolos((current) => [newBolo, ...current]);
+      addLog(`BOLO added: ${title}.`, title);
+      formElement.reset();
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not add BOLO.");
+    }
   }
 
-  function changeUnitStatus(unitId: string, status: DispatchUnit["status"]) {
+  async function changeUnitStatus(unitId: string, status: DispatchUnit["status"]) {
+    const supabase = getSupabaseBrowserClient();
     const unit = units.find((item) => item.id === unitId);
+    if (!supabase || !unit) {
+      setSyncNotice("Supabase is not available for unit status updates.");
+      return;
+    }
     setUnits((current) =>
       current.map((item) => (item.id === unitId ? { ...item, status, lastUpdate: nowTime() } : item)),
     );
-    addLog(`${unit?.unit ?? "Unit"} status changed to ${status}.`, unit?.assignedCall);
+    try {
+      await updateDispatchUnitStatus(supabase, unitId, status);
+      addLog(`${unit.unit} status changed to ${status}.`, unit.assignedCall);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not update unit status.");
+      await refreshDispatchData();
+    }
+  }
+
+  async function runLookup(label: string, query: string) {
+    addLog(`Lookup searched: ${label}.`, label);
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSyncNotice("Supabase is not configured. Lookups are unavailable.");
+      return;
+    }
+    try {
+      setLookupResults(await searchCadRecords(supabase, query));
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not run lookup.");
+    }
   }
 
   function stopTones() {
@@ -195,7 +286,7 @@ export function DispatchWorkstation() {
       <div className="grid min-h-screen lg:grid-cols-[240px_1fr]">
         <ModuleRail activeModule={activeModule} onModuleChange={setActiveModule} />
         <div className="min-w-0">
-          <TerminalBar calls={calls} units={units} />
+          <TerminalBar calls={calls} syncNotice={syncNotice} units={units} />
           <main className="h-[calc(100vh-76px)] overflow-y-auto p-4">
             {activeModule === "command-center" ? (
               <CommandCenter
@@ -235,7 +326,7 @@ export function DispatchWorkstation() {
                 search={boloSearch}
               />
             ) : null}
-            {activeModule === "lookups" ? <LookupModule onSearch={(label) => addLog(`Lookup searched: ${label}.`, label)} /> : null}
+            {activeModule === "lookups" ? <LookupModule onSearch={runLookup} results={lookupResults} /> : null}
             {activeModule === "tone-board" ? (
               <ToneBoardModule
                 onPlayTone={(label, path) => void playTone(label, path)}
@@ -292,7 +383,7 @@ function ModuleRail({
   );
 }
 
-function TerminalBar({ calls, units }: { calls: DispatchCall[]; units: DispatchUnit[] }) {
+function TerminalBar({ calls, syncNotice, units }: { calls: DispatchCall[]; syncNotice: string; units: DispatchUnit[] }) {
   const panicCount = units.filter((unit) => unit.status === "Panic" || unit.status === "Signal 100").length;
   return (
     <header className="border-b border-white/10 bg-neutral-900 px-4 py-3">
@@ -306,7 +397,7 @@ function TerminalBar({ calls, units }: { calls: DispatchCall[]; units: DispatchU
           <Pill>{calls.filter((call) => call.status !== "Closed").length} Active Calls</Pill>
           <Pill>{units.filter((unit) => unit.status === "Available").length} Available Units</Pill>
           <Pill critical={panicCount > 0}>{panicCount} Emergency Flags</Pill>
-          <Pill>Supabase/FiveM Sync Awaiting Integration</Pill>
+          <Pill>{syncNotice}</Pill>
         </div>
       </div>
     </header>
@@ -657,7 +748,7 @@ function BoloModule({
   );
 }
 
-function LookupModule({ onSearch }: { onSearch: (label: string) => void }) {
+function LookupModule({ onSearch, results }: { onSearch: (label: string, query: string) => void; results: CadLookupResult[] }) {
   const tabs = ["Name lookup", "License lookup", "Plate lookup", "Vehicle lookup", "Weapon lookup", "Warrant lookup", "BOLO lookup"];
   const [tab, setTab] = useState(tabs[0]);
   const [query, setQuery] = useState("");
@@ -670,10 +761,22 @@ function LookupModule({ onSearch }: { onSearch: (label: string) => void }) {
       </div>
       <div className="grid gap-3 md:grid-cols-[1fr_auto]">
         <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white" placeholder={`Search ${tab.toLowerCase()}`} />
-        <button onClick={() => onSearch(`${tab}: ${query || "empty query"}`)} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
+        <button onClick={() => onSearch(`${tab}: ${query || "empty query"}`, query)} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
       </div>
-      <div className="mt-4">
-        <UnderConstruction text={`${tab} — Awaiting database connection`} />
+      <div className="mt-4 space-y-2">
+        {results.length ? (
+          results.map((result) => (
+            <div key={`${result.source}-${result.id}`} className="rounded-md border border-white/10 bg-neutral-950 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-semibold text-white">{result.label}</p>
+                <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
+              </div>
+              <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
+            </div>
+          ))
+        ) : (
+          <UnderConstruction text={`${tab} - No Supabase results for this query yet.`} />
+        )}
       </div>
     </Panel>
   );

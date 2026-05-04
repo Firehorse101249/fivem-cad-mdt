@@ -2,7 +2,18 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
-  activeCalls,
+  dispatchBolosToMdt,
+  dispatchCallsToMdt,
+  dispatchUnitsToRoster,
+  loadDispatchData,
+  searchCadRecords,
+  updateDispatchCallUnits,
+  updateDispatchUnitStatus,
+  upsertOfficerUnit,
+  type CadLookupResult,
+} from "@/app/_lib/cad-data";
+import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
+import {
   agencyOptions,
   agencyUnitTypes,
   lookupTabs,
@@ -12,12 +23,10 @@ import {
   arrestWorkflows,
   citationWorkflows,
   quickStatusButtons,
-  recentBolos,
   statusOptions,
-  unitRoster,
   workflowGroups,
 } from "./mockOfficerData";
-import type { ActivityLogEntry, Agency, LookupTab, MdtCall, MdtSession, OfficerModule, UnitStatus } from "./types";
+import type { ActivityLogEntry, Agency, Bolo, LookupTab, MdtCall, MdtSession, OfficerModule, UnitRosterEntry, UnitStatus } from "./types";
 
 const sessionKey = "sentinel-officer-mdt-session";
 
@@ -55,8 +64,14 @@ export function OfficerMdt() {
   const [hydrated, setHydrated] = useState(false);
   const [module, setModule] = useState<OfficerModule>("home");
   const [status, setStatus] = useState<UnitStatus>("Available");
-  const [calls, setCalls] = useState<MdtCall[]>(activeCalls);
-  const [selectedCallId, setSelectedCallId] = useState(activeCalls[0]?.id ?? "");
+  const [calls, setCalls] = useState<MdtCall[]>([]);
+  const [selectedCallId, setSelectedCallId] = useState("");
+  const [bolos, setBolos] = useState<Bolo[]>([]);
+  const [roster, setRoster] = useState<UnitRosterEntry[]>([]);
+  const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
+  const [unitRowId, setUnitRowId] = useState("");
+  const [userId, setUserId] = useState("");
+  const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [panicArmed, setPanicArmed] = useState(false);
   const [panicActive, setPanicActive] = useState(false);
   const [log, setLog] = useState<ActivityLogEntry[]>([
@@ -64,6 +79,21 @@ export function OfficerMdt() {
   ]);
 
   useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    async function refresh() {
+      if (!supabase) {
+        setSyncNotice("Supabase is not configured. MDT is running without live CAD data.");
+        return;
+      }
+      const data = await loadDispatchData(supabase);
+      const nextCalls = dispatchCallsToMdt(data.calls);
+      setCalls(nextCalls);
+      setBolos(dispatchBolosToMdt(data.bolos));
+      setRoster(dispatchUnitsToRoster(data.units));
+      setSelectedCallId((current) => current || nextCalls[0]?.id || "");
+      setSyncNotice("Active calls, BOLOs, and unit roster are synced with Supabase.");
+    }
+
     queueMicrotask(() => {
       const stored = window.localStorage.getItem(sessionKey);
       if (stored) {
@@ -75,8 +105,32 @@ export function OfficerMdt() {
           window.localStorage.removeItem(sessionKey);
         }
       }
-      setHydrated(true);
+      queueMicrotask(async () => {
+        if (supabase) {
+          const { data } = await supabase.auth.getUser();
+          setUserId(data.user?.id ?? "");
+        }
+        try {
+          await refresh();
+        } catch (error) {
+          setSyncNotice(error instanceof Error ? error.message : "Could not load Supabase MDT data.");
+        } finally {
+          setHydrated(true);
+        }
+      });
     });
+
+    if (!supabase) return;
+    const channel = supabase
+      .channel("officer-mdt-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_calls" }, () => void refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_units" }, () => void refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "bolos" }, () => void refresh())
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? calls[0] ?? null;
@@ -85,10 +139,20 @@ export function OfficerMdt() {
     setLog((current) => [{ id: makeId("log"), message, module: logModule, timestamp: nowTime() }, ...current]);
   }
 
-  function startSession(nextSession: MdtSession) {
+  async function startSession(nextSession: MdtSession) {
     window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
     setSession(nextSession);
     setStatus("Available");
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      try {
+        const id = await upsertOfficerUnit(supabase, nextSession, "Available", userId);
+        setUnitRowId(id);
+        setSyncNotice("Unit is on duty and synced to dispatch_units.");
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : "Could not sync unit duty status.");
+      }
+    }
     addLog(`${nextSession.callsign} logged into MDT as ${nextSession.agency} ${nextSession.unitType}.`, "Login");
   }
 
@@ -100,19 +164,30 @@ export function OfficerMdt() {
     setModule("home");
   }
 
-  function changeStatus(nextStatus: UnitStatus) {
+  async function changeStatus(nextStatus: UnitStatus) {
     setStatus(nextStatus);
+    const supabase = getSupabaseBrowserClient();
+    if (supabase && session) {
+      try {
+        const id = unitRowId || await upsertOfficerUnit(supabase, session, nextStatus, userId);
+        setUnitRowId(id);
+        await updateDispatchUnitStatus(supabase, id, nextStatus);
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : "Could not sync unit status.");
+      }
+    }
     if (nextStatus === "Panic") {
       setPanicActive(true);
       setModule("panic");
-      addLog("Panic status activated from status controls. FiveM panic sync -- Under Construction.", "Panic");
+      addLog("Panic status activated and synced to dispatch_units.", "Panic");
       return;
     }
     addLog(`Status changed to ${nextStatus}.`, "Status");
   }
 
-  function attachToCall(call: MdtCall) {
+  async function attachToCall(call: MdtCall) {
     if (!session) return;
+    const nextUnits = call.units.includes(session.callsign) ? call.units : [...call.units, session.callsign];
     setCalls((current) =>
       current.map((item) =>
         item.id === call.id && !item.units.includes(session.callsign)
@@ -121,11 +196,20 @@ export function OfficerMdt() {
       ),
     );
     setSelectedCallId(call.id);
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      try {
+        await updateDispatchCallUnits(supabase, call, nextUnits);
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : "Could not sync call attachment.");
+      }
+    }
     addLog(`Attached to ${call.callNumber}.`, "Active Calls");
   }
 
-  function detachFromCall(call: MdtCall) {
+  async function detachFromCall(call: MdtCall) {
     if (!session) return;
+    const nextUnits = call.units.filter((unit) => unit !== session.callsign);
     setCalls((current) =>
       current.map((item) =>
         item.id === call.id
@@ -133,14 +217,37 @@ export function OfficerMdt() {
           : item,
       ),
     );
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      try {
+        await updateDispatchCallUnits(supabase, call, nextUnits);
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : "Could not sync call detachment.");
+      }
+    }
     addLog(`Detached from ${call.callNumber}.`, "Active Calls");
   }
 
-  function activatePanic() {
+  async function activatePanic() {
     setPanicActive(true);
     setPanicArmed(false);
-    setStatus("Panic");
-    addLog("Emergency panic activated. FiveM panic sync -- Under Construction.", "Panic");
+    await changeStatus("Panic");
+    addLog("Emergency panic activated and synced to dispatch.", "Panic");
+  }
+
+  async function runLookup(query: string) {
+    addLog(`Lookup submitted: ${query}.`, "Lookups");
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSyncNotice("Supabase is not configured. Lookups are unavailable.");
+      return;
+    }
+    try {
+      const value = query.includes(":") ? query.split(":").slice(1).join(":").trim() : query;
+      setLookupResults(await searchCadRecords(supabase, value));
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not run lookup.");
+    }
   }
 
   if (!hydrated) {
@@ -184,7 +291,7 @@ export function OfficerMdt() {
         </aside>
 
         <div className="min-w-0">
-          <TopStatusBar onEndSession={endSession} panicActive={panicActive} session={session} status={status} />
+          <TopStatusBar onEndSession={endSession} panicActive={panicActive} session={session} status={status} syncNotice={syncNotice} />
           <main className="h-[calc(100vh-88px)] overflow-y-auto p-4">
             {module === "home" ? (
               <HomeDashboard
@@ -192,6 +299,8 @@ export function OfficerMdt() {
                 onModuleChange={setModule}
                 onStatusChange={changeStatus}
                 panicActive={panicActive}
+                bolos={bolos}
+                calls={calls}
                 session={session}
                 status={status}
               />
@@ -200,15 +309,15 @@ export function OfficerMdt() {
               <ActiveCalls calls={calls} onAttach={attachToCall} onDetach={detachFromCall} onSelect={setSelectedCallId} selectedCall={selectedCall} session={session} />
             ) : null}
             {module === "my-status" ? <MyStatus agency={session.agency} onStatusChange={changeStatus} status={status} /> : null}
-            {module === "lookups" ? <Lookups onSearch={(query) => addLog(`Lookup submitted: ${query}.`, "Lookups")} /> : null}
+            {module === "lookups" ? <Lookups onSearch={runLookup} results={lookupResults} /> : null}
             {module === "reports" ? <Reports agency={session.agency} onDraft={(name) => addLog(`${name} draft opened.`, "Reports")} /> : null}
             {module === "citations" ? <WorkflowModule title="Citations" workflows={citationWorkflows} onDraft={addLog} /> : null}
             {module === "arrests" ? <WorkflowModule title="Arrests" workflows={arrestWorkflows} onDraft={addLog} /> : null}
-            {module === "warrants" ? <Warrants /> : null}
-            {module === "bolos" ? <Bolos /> : null}
+            {module === "warrants" ? <Warrants bolos={bolos} /> : null}
+            {module === "bolos" ? <Bolos bolos={bolos} /> : null}
             {module === "penal-code" ? <PenalCode /> : null}
             {module === "department-policies" ? <Policies /> : null}
-            {module === "supervisor-panel" ? <SupervisorPanel allowed={isSupervisor(session)} calls={calls} panicActive={panicActive} /> : null}
+            {module === "supervisor-panel" ? <SupervisorPanel allowed={isSupervisor(session)} calls={calls} panicActive={panicActive} roster={roster} /> : null}
             {module === "panic" ? (
               <PanicPanel active={panicActive} armed={panicArmed} onArm={() => setPanicArmed(true)} onCancel={() => setPanicArmed(false)} onConfirm={activatePanic} />
             ) : null}
@@ -225,7 +334,7 @@ export function OfficerMdt() {
   );
 }
 
-function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void }) {
+function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Promise<void> }) {
   const [agency, setAgency] = useState<Agency>("Law Enforcement");
   const [callsign, setCallsign] = useState("");
   const [officerName, setOfficerName] = useState("");
@@ -237,7 +346,7 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void }) {
     if (!callsign.trim()) return;
     setLoggingIn(true);
     window.setTimeout(() => {
-      onSubmit({
+      void onSubmit({
         agency,
         callsign: callsign.trim().toUpperCase(),
         officerName: officerName.trim() || "Field Unit",
@@ -260,12 +369,12 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void }) {
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-300">Mobile Data Terminal</p>
             <h1 className="mt-3 text-3xl font-semibold text-white">Log Into MDT</h1>
             <p className="mt-3 text-sm leading-6 text-neutral-400">
-              Unit setup is stored locally for now. Supabase authentication, unit assignment, and FiveM duty sync are Awaiting Supabase/FiveM integration.
+              Unit setup opens a Supabase-backed duty row for dispatch visibility. FiveM duty bridge integration is still pending.
             </p>
             <div className="mt-6 grid gap-3 text-sm">
               <Info label="Terminal" value="In-car MDT workstation" />
-              <Info label="Network" value="CAD bridge offline / local session mode" />
-              <Info label="Shift Control" value="Go On Duty initializes the local unit state" />
+              <Info label="Network" value="Supabase CAD sync" />
+              <Info label="Shift Control" value="Go On Duty syncs the unit roster" />
             </div>
           </section>
 
@@ -312,7 +421,7 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void }) {
               </button>
             </div>
             <p className="mt-4 border border-dashed border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-sm text-amber-100">
-              FiveM duty sync -- Under Construction
+              FiveM duty bridge -- Under Construction
             </p>
           </form>
         </div>
@@ -326,11 +435,13 @@ function TopStatusBar({
   panicActive,
   session,
   status,
+  syncNotice,
 }: {
   onEndSession: () => void;
   panicActive: boolean;
   session: MdtSession;
   status: UnitStatus;
+  syncNotice: string;
 }) {
   return (
     <header className="border-b border-white/10 bg-neutral-900 px-4 py-3">
@@ -344,7 +455,7 @@ function TopStatusBar({
           <Pill>{session.unitType}</Pill>
           <Pill className={statusClass(status)}>{status}</Pill>
           <Pill className={panicActive ? "border-rose-300/50 bg-rose-400/20 text-rose-100" : ""}>{panicActive ? "PANIC ACTIVE" : "Panic clear"}</Pill>
-          <Pill>FiveM sync Under Construction</Pill>
+          <Pill>{syncNotice}</Pill>
           <button onClick={onEndSession} className="rounded-md border border-white/15 px-3 py-1 text-neutral-300 hover:bg-white/10">End Shift</button>
         </div>
       </div>
@@ -354,6 +465,8 @@ function TopStatusBar({
 
 function HomeDashboard({
   assignedCall,
+  bolos,
+  calls,
   onModuleChange,
   onStatusChange,
   panicActive,
@@ -361,14 +474,16 @@ function HomeDashboard({
   status,
 }: {
   assignedCall: MdtCall | null;
+  bolos: Bolo[];
+  calls: MdtCall[];
   onModuleChange: (module: OfficerModule) => void;
-  onStatusChange: (status: UnitStatus) => void;
+  onStatusChange: (status: UnitStatus) => void | Promise<void>;
   panicActive: boolean;
   session: MdtSession;
   status: UnitStatus;
 }) {
   const alerts = [
-    ...activeCalls.filter((call) => call.priority === "Critical" && (call.serviceType === session.agency || call.serviceType === "Multi-agency")),
+    ...calls.filter((call) => call.priority === "Critical" && (call.serviceType === session.agency || call.serviceType === "Multi-agency")),
     ...(panicActive ? [{ callNumber: "PANIC", incidentType: "Unit emergency", address: "Current GPS pending FiveM sync" } as MdtCall] : []),
   ];
 
@@ -399,7 +514,7 @@ function HomeDashboard({
         </div>
       </Panel>
       <Panel title="Recent BOLOs">
-        <BoloList compact />
+        <BoloList bolos={bolos} compact />
       </Panel>
       <Panel title="Assigned Call Detail">
         {assignedCall ? <CallDetail call={assignedCall} /> : <Notice text="No assigned call. Open Active Calls to attach to a call." />}
@@ -474,7 +589,7 @@ function MyStatus({ agency, onStatusChange, status }: { agency: Agency; onStatus
   );
 }
 
-function Lookups({ onSearch }: { onSearch: (query: string) => void }) {
+function Lookups({ onSearch, results }: { onSearch: (query: string) => void; results: CadLookupResult[] }) {
   const [tab, setTab] = useState<LookupTab>("Name");
   const [query, setQuery] = useState("");
 
@@ -492,10 +607,24 @@ function Lookups({ onSearch }: { onSearch: (query: string) => void }) {
         <button onClick={() => onSearch(`${tab}: ${query || "empty query"}`)} className="h-11 rounded-md bg-sky-400 px-5 text-sm font-bold text-neutral-950">Search</button>
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <Info label="Result Source" value="Awaiting database connection" />
-        <Info label="FiveM Sync" value="Awaiting Supabase/FiveM integration" />
+        <Info label="Result Source" value="Supabase civilian, vehicle, and BOLO tables" />
+        <Info label="FiveM Sync" value="CAD data synced through Supabase; FiveM bridge pending" />
       </div>
-      <Notice text="Awaiting database connection" />
+      <div className="mt-4 grid gap-2">
+        {results.length ? (
+          results.map((result) => (
+            <div key={`${result.source}-${result.id}`} className="rounded-md border border-white/10 bg-neutral-950 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-semibold text-white">{result.label}</p>
+                <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
+              </div>
+              <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
+            </div>
+          ))
+        ) : (
+          <Notice text="No Supabase lookup results for this query yet." />
+        )}
+      </div>
     </Panel>
   );
 }
@@ -537,19 +666,19 @@ function WorkflowModule({ onDraft, title, workflows }: { onDraft: (message: stri
   );
 }
 
-function Warrants() {
+function Warrants({ bolos }: { bolos: Bolo[] }) {
   return (
     <Panel title="Warrants">
-      <BoloList type="Warrant" />
-      <Notice text="Warrant hit confirmation and court record sync are Awaiting Supabase/FiveM integration." />
+      <BoloList bolos={bolos} type="Warrant" />
+      <Notice text="Warrant hit confirmation and court record sync are pending; BOLO-style hits now read from Supabase." />
     </Panel>
   );
 }
 
-function Bolos() {
+function Bolos({ bolos }: { bolos: Bolo[] }) {
   return (
     <Panel title="BOLOs">
-      <BoloList />
+      <BoloList bolos={bolos} />
     </Panel>
   );
 }
@@ -597,7 +726,7 @@ function Policies() {
   );
 }
 
-function SupervisorPanel({ allowed, calls, panicActive }: { allowed: boolean; calls: MdtCall[]; panicActive: boolean }) {
+function SupervisorPanel({ allowed, calls, panicActive, roster }: { allowed: boolean; calls: MdtCall[]; panicActive: boolean; roster: UnitRosterEntry[] }) {
   if (!allowed) {
     return <Panel title="Supervisor Panel"><Notice text="Supervisor Access Required" /></Panel>;
   }
@@ -605,7 +734,7 @@ function SupervisorPanel({ allowed, calls, panicActive }: { allowed: boolean; ca
     <div className="grid gap-4 2xl:grid-cols-2">
       <Panel title="Unit List">
         <div className="space-y-2">
-          {unitRoster.map((unit) => (
+          {roster.map((unit) => (
             <div key={unit.callsign} className="grid gap-2 rounded-md border border-white/10 bg-neutral-950 p-3 text-sm lg:grid-cols-[0.6fr_0.9fr_0.8fr_0.9fr_1fr]">
               <span className="font-mono text-white">{unit.callsign}</span>
               <span>{unit.agency}</span>
@@ -668,11 +797,11 @@ function Settings() {
   );
 }
 
-function BoloList({ compact = false, type }: { compact?: boolean; type?: LookupTab }) {
-  const items = type ? recentBolos.filter((bolo) => bolo.type === type) : recentBolos;
+function BoloList({ bolos, compact = false, type }: { bolos: Bolo[]; compact?: boolean; type?: LookupTab }) {
+  const items = type ? bolos.filter((bolo) => bolo.type === type) : bolos;
   return (
     <div className={compact ? "space-y-2" : "grid gap-3 lg:grid-cols-2"}>
-      {items.map((bolo) => (
+      {items.length ? items.map((bolo) => (
         <article key={bolo.id} className="rounded-md border border-white/10 bg-neutral-950 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-semibold text-white">{bolo.title}</h3>
@@ -681,7 +810,7 @@ function BoloList({ compact = false, type }: { compact?: boolean; type?: LookupT
           <p className="mt-2 text-sm text-neutral-300">{bolo.description}</p>
           <p className="mt-2 text-xs text-neutral-500">{bolo.type} / {bolo.location} / {bolo.associated}</p>
         </article>
-      ))}
+      )) : <Notice text="No active Supabase BOLO records." />}
     </div>
   );
 }

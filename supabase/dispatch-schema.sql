@@ -1,6 +1,8 @@
 -- Starter dispatch schema for Sentinel CAD/MDT.
 -- Safe to run in Supabase SQL Editor. Uses CREATE TABLE IF NOT EXISTS and
 -- ALTER TABLE ADD COLUMN IF NOT EXISTS; it does not drop or truncate data.
+--
+-- Run supabase/rls-policies.sql first so public.get_my_role() exists.
 
 create table if not exists public.dispatch_calls (
   id uuid primary key default gen_random_uuid(),
@@ -149,3 +151,88 @@ alter table public.bolos enable row level security;
 alter table public.weapons enable row level security;
 alter table public.vehicle_records enable row level security;
 alter table public.license_records enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_calls' and policyname = 'dispatch_calls_staff_read') then
+    create policy "dispatch_calls_staff_read" on public.dispatch_calls for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_calls' and policyname = 'dispatch_calls_dispatch_write') then
+    create policy "dispatch_calls_dispatch_write" on public.dispatch_calls for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_calls' and policyname = 'dispatch_calls_officer_update_readable') then
+    create policy "dispatch_calls_officer_update_readable" on public.dispatch_calls for update to authenticated using (
+      public.get_my_role() = 'officer'
+    ) with check (
+      public.get_my_role() = 'officer'
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_units' and policyname = 'dispatch_units_staff_read') then
+    create policy "dispatch_units_staff_read" on public.dispatch_units for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_units' and policyname = 'dispatch_units_dispatch_all') then
+    create policy "dispatch_units_dispatch_all" on public.dispatch_units for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_units' and policyname = 'dispatch_units_officer_insert_own') then
+    create policy "dispatch_units_officer_insert_own" on public.dispatch_units for insert to authenticated with check (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_units' and policyname = 'dispatch_units_officer_update_own') then
+    create policy "dispatch_units_officer_update_own" on public.dispatch_units for update to authenticated using (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    ) with check (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'bolos' and policyname = 'bolos_staff_read') then
+    create policy "bolos_staff_read" on public.bolos for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'bolos' and policyname = 'bolos_dispatch_all') then
+    create policy "bolos_dispatch_all" on public.bolos for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'bolos' and policyname = 'bolos_officer_insert_own') then
+    create policy "bolos_officer_insert_own" on public.bolos for insert to authenticated with check (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'bolos' and policyname = 'bolos_officer_update_own') then
+    create policy "bolos_officer_update_own" on public.bolos for update to authenticated using (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    ) with check (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    );
+  end if;
+end $$;
