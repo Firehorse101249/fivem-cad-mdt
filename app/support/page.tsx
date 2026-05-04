@@ -7,8 +7,8 @@ export const metadata: Metadata = {
     "Support the Sentinel FiveM community with donations for CAD hosting, server tools, and ongoing development.",
 };
 
-const donationCheckoutUrl = process.env.NEXT_PUBLIC_DONATION_URL?.trim();
-const donationReady = Boolean(donationCheckoutUrl);
+const customDonationCheckoutUrl = "https://buy.stripe.com/00weVcbiN27t48nfdH2Fa04";
+const donationReady = true;
 const defaultDiscordUrl = "https://discord.gg/QdzVHndQqF";
 const discordUrl = process.env.NEXT_PUBLIC_DISCORD_URL?.trim() || defaultDiscordUrl;
 const discordHref = discordUrl || "/#community-discord";
@@ -16,24 +16,28 @@ const discordHref = discordUrl || "/#community-discord";
 const donationTiers = [
   {
     amount: 5,
+    checkoutUrl: "https://buy.stripe.com/7sY5kCeuZ27t9sH0iN2Fa00",
     title: "Fuel Stop",
     description: "A small boost toward hosting, database usage, and routine CAD upkeep.",
     impact: "Helps keep the day-to-day systems moving.",
   },
   {
     amount: 15,
+    checkoutUrl: "https://buy.stripe.com/4gM4gy3QleUfeN18Pj2Fa01",
     title: "Patrol Assist",
     description: "Supports server tools, auth services, and the features members use most.",
     impact: "Good for steady maintenance and quick quality-of-life fixes.",
   },
   {
     amount: 30,
+    checkoutUrl: "https://buy.stripe.com/dRmbJ0aeJcM78oDd5z2Fa02",
     title: "Dispatch Boost",
     description: "Backs larger CAD/MDT improvements for dispatch, patrol, civilian, and staff workflows.",
     impact: "Good for meaningful feature work across departments.",
   },
   {
     amount: 50,
+    checkoutUrl: "https://buy.stripe.com/6oU4gy1Id13p0WbaXr2Fa03",
     title: "Community Builder",
     description: "Helps fund bigger upgrades, production polish, and long-running upkeep.",
     impact: "Good for larger roadmap items and reliability work.",
@@ -100,15 +104,7 @@ function HeartIcon() {
 }
 
 function getDonationHref(amount?: number) {
-  if (!donationCheckoutUrl) {
-    return "#donation-checkout";
-  }
-
-  if (amount && donationCheckoutUrl.includes("{amount}")) {
-    return donationCheckoutUrl.replaceAll("{amount}", String(amount));
-  }
-
-  return donationCheckoutUrl;
+  return donationTiers.find((tier) => tier.amount === amount)?.checkoutUrl ?? customDonationCheckoutUrl;
 }
 
 type DonateButtonProps = {
