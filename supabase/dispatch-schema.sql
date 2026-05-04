@@ -204,6 +204,12 @@ begin
       and created_by = auth.uid()
     );
   end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'dispatch_units' and policyname = 'dispatch_units_officer_delete_own') then
+    create policy "dispatch_units_officer_delete_own" on public.dispatch_units for delete to authenticated using (
+      public.get_my_role() = 'officer'
+      and created_by = auth.uid()
+    );
+  end if;
 end $$;
 
 do $$

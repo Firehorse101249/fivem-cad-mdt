@@ -26,6 +26,7 @@ export type ServiceType = "EMS" | "Fire" | "Law Enforcement" | "Multi-agency" | 
 
 export type UnitStatus =
   | "At Hospital"
+  | "Assigned"
   | "Available"
   | "Busy"
   | "Complete"

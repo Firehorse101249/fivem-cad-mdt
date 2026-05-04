@@ -335,7 +335,7 @@ export async function createCivilianVehicle(
 
 export async function loadDispatchData(supabase: SupabaseClient) {
   const [callsResult, unitsResult, bolosResult] = await Promise.all([
-    supabase.from("dispatch_calls").select("*").order("created_at", { ascending: false }),
+    supabase.from("dispatch_calls").select("*").neq("status", "Closed").order("created_at", { ascending: false }),
     supabase.from("dispatch_units").select("*").order("callsign", { ascending: true }),
     supabase.from("bolos").select("*").order("created_at", { ascending: false }),
   ]);
@@ -387,6 +387,12 @@ export async function createDispatchCall(supabase: SupabaseClient, form: CallFor
 }
 
 export async function updateDispatchCallStatus(supabase: SupabaseClient, call: DispatchCall, status: CallStatus) {
+  if (status === "Closed") {
+    const { error } = await supabase.from("dispatch_calls").delete().eq("id", call.id);
+    if (error) throw error;
+    return null;
+  }
+
   const timeline = [`${timeLabel(new Date().toISOString())} status changed to ${status}`, ...call.timeline];
   const { data, error } = await supabase
     .from("dispatch_calls")
@@ -408,7 +414,7 @@ export async function updateDispatchCallStatus(supabase: SupabaseClient, call: D
   return mapDispatchCall(data as Row);
 }
 
-export async function updateDispatchCallUnits(supabase: SupabaseClient, call: MdtCall, units: string[]) {
+export async function updateDispatchCallUnits(supabase: SupabaseClient, call: MdtCall | DispatchCall, units: string[]) {
   const { data, error } = await supabase
     .from("dispatch_calls")
     .update({ assigned_units: units, status: units.length ? "Assigned" : call.status, updated_at: new Date().toISOString() })
@@ -418,6 +424,40 @@ export async function updateDispatchCallUnits(supabase: SupabaseClient, call: Md
 
   if (error) throw error;
   return mapDispatchCall(data as Row);
+}
+
+export async function assignDispatchUnitToCall(supabase: SupabaseClient, call: DispatchCall, unit: DispatchUnit) {
+  const assignedUnits = call.assignedUnits.includes(unit.unit) ? call.assignedUnits : [...call.assignedUnits, unit.unit];
+  const updatedCall = await updateDispatchCallUnits(supabase, call, assignedUnits);
+
+  const { error } = await supabase
+    .from("dispatch_units")
+    .update({
+      current_call_id: call.id,
+      status: unit.status === "Available" ? "Assigned" : unit.status,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", unit.id);
+
+  if (error) throw error;
+  return updatedCall;
+}
+
+export async function removeDispatchUnitFromCall(supabase: SupabaseClient, call: DispatchCall, unit: DispatchUnit) {
+  const assignedUnits = call.assignedUnits.filter((callsign) => callsign !== unit.unit);
+  const updatedCall = await updateDispatchCallUnits(supabase, call, assignedUnits);
+
+  const { error } = await supabase
+    .from("dispatch_units")
+    .update({
+      current_call_id: null,
+      status: unit.status === "Assigned" ? "Available" : unit.status,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", unit.id);
+
+  if (error) throw error;
+  return updatedCall;
 }
 
 export async function createBolo(supabase: SupabaseClient, form: FormData, createdBy?: string) {
@@ -450,6 +490,16 @@ export async function updateDispatchUnitStatus(supabase: SupabaseClient, unitId:
 
   if (error) throw error;
   return data as Row;
+}
+
+export async function removeDispatchUnit(supabase: SupabaseClient, unitId: string) {
+  const { error } = await supabase.from("dispatch_units").delete().eq("id", unitId);
+  if (error) throw error;
+}
+
+export async function removeDispatchUnitByCallsign(supabase: SupabaseClient, callsign: string) {
+  const { error } = await supabase.from("dispatch_units").delete().eq("callsign", callsign);
+  if (error) throw error;
 }
 
 export async function upsertOfficerUnit(supabase: SupabaseClient, session: MdtSession, status: OfficerUnitStatus, userId?: string) {

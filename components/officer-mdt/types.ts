@@ -19,6 +19,7 @@ export type UnitType =
   | "Standard";
 
 export type UnitStatus =
+  | "Assigned"
   | "Available"
   | "Enroute"
   | "On Scene"

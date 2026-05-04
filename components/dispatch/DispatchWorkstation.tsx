@@ -1,11 +1,15 @@
 "use client";
 
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  assignDispatchUnitToCall,
   createBolo,
   createDispatchCall,
   loadDispatchData,
+  removeDispatchUnit,
+  removeDispatchUnitFromCall,
   searchCadRecords,
   updateDispatchCallStatus,
   updateDispatchUnitStatus,
@@ -67,6 +71,24 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
 }
 
+function unlockBrowserAudio() {
+  try {
+    const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const context = new AudioContextCtor();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    gain.gain.value = 0;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.01);
+    void context.resume();
+  } catch {
+    // Browser audio unlock is best-effort; visible tone errors handle failures later.
+  }
+}
+
 function priorityClass(priority: Priority) {
   if (priority === "Critical") return "bg-rose-400/15 text-rose-100 border-rose-300/30";
   if (priority === "High") return "bg-amber-300/10 text-amber-100 border-amber-300/30";
@@ -105,6 +127,7 @@ export function DispatchWorkstation() {
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
+  const audioChannelRef = useRef<RealtimeChannel | null>(null);
   const beepContextRef = useRef<AudioContext | null>(null);
   const audioClientIdRef = useRef(makeId("dispatch-audio"));
 
@@ -197,9 +220,15 @@ export function DispatchWorkstation() {
       }
     };
 
-    playIntervalBeep();
-    const intervalId = window.setInterval(playIntervalBeep, 8000);
-    return () => window.clearInterval(intervalId);
+    let intervalId = 0;
+    const timeoutId = window.setTimeout(() => {
+      playIntervalBeep();
+      intervalId = window.setInterval(playIntervalBeep, 5000);
+    }, 5000);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId) window.clearInterval(intervalId);
+    };
   }, [signal100BeepActive, volume]);
 
   useEffect(() => {
@@ -248,6 +277,11 @@ export function DispatchWorkstation() {
     try {
       await updateDispatchCallStatus(supabase, call, status);
       addLog(`Call status changed to ${status}.`, call.callNumber);
+      if (status === "Closed") {
+        setCalls((current) => current.filter((item) => item.id !== callId));
+        setSelectedCallId((current) => (current === callId ? "" : current));
+        await refreshDispatchData();
+      }
     } catch (error) {
       setSyncNotice(error instanceof Error ? error.message : "Could not update call status.");
       await refreshDispatchData(callId);
@@ -320,6 +354,63 @@ export function DispatchWorkstation() {
     }
   }
 
+  async function removeUnit(unitId: string) {
+    const supabase = getSupabaseBrowserClient();
+    const unit = units.find((item) => item.id === unitId);
+    if (!supabase || !unit) {
+      setSyncNotice("Supabase is not available for unit removal.");
+      return;
+    }
+
+    setUnits((current) => current.filter((item) => item.id !== unitId));
+    try {
+      await removeDispatchUnit(supabase, unitId);
+      addLog(`${unit.unit} removed from active dispatch roster.`, unit.assignedCall);
+      await refreshDispatchData();
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not remove unit.");
+      await refreshDispatchData();
+    }
+  }
+
+  async function assignUnitToCall(callId: string, unitId: string) {
+    const supabase = getSupabaseBrowserClient();
+    const call = calls.find((item) => item.id === callId);
+    const unit = units.find((item) => item.id === unitId);
+    if (!supabase || !call || !unit) {
+      setSyncNotice("Select a valid call and unit before assigning.");
+      return;
+    }
+
+    try {
+      await assignDispatchUnitToCall(supabase, call, unit);
+      addLog(`${unit.unit} assigned to ${call.callNumber}.`, call.callNumber);
+      await refreshDispatchData(call.id);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not assign unit to call.");
+      await refreshDispatchData(call.id);
+    }
+  }
+
+  async function removeUnitFromCall(callId: string, unitId: string) {
+    const supabase = getSupabaseBrowserClient();
+    const call = calls.find((item) => item.id === callId);
+    const unit = units.find((item) => item.id === unitId);
+    if (!supabase || !call || !unit) {
+      setSyncNotice("Select a valid call and unit before removing assignment.");
+      return;
+    }
+
+    try {
+      await removeDispatchUnitFromCall(supabase, call, unit);
+      addLog(`${unit.unit} removed from ${call.callNumber}.`, call.callNumber);
+      await refreshDispatchData(call.id);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : "Could not remove unit from call.");
+      await refreshDispatchData(call.id);
+    }
+  }
+
   async function runLookup(label: string, query: string) {
     addLog(`Lookup searched: ${label}.`, label);
     const supabase = getSupabaseBrowserClient();
@@ -377,18 +468,12 @@ export function DispatchWorkstation() {
   }, [stopTones, volume]);
 
   const broadcastAudioEvent = useCallback(async (event: "panic" | "signal-100" | "tone", payload: Record<string, unknown>) => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
-    const channel = supabase.channel("cad-audio-events");
-    await channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        void channel.send({
-          event,
-          payload: { ...payload, source: audioClientIdRef.current },
-          type: "broadcast",
-        });
-        void supabase.removeChannel(channel);
-      }
+    const channel = audioChannelRef.current;
+    if (!channel) return;
+    await channel.send({
+      event,
+      payload: { ...payload, source: audioClientIdRef.current },
+      type: "broadcast",
     });
   }, []);
 
@@ -459,8 +544,10 @@ export function DispatchWorkstation() {
         }
       })
       .subscribe();
+    audioChannelRef.current = channel;
 
     return () => {
+      audioChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
   }, [playAudio, startSignal100Sequence, triggerPanicSequence]);
@@ -494,16 +581,19 @@ export function DispatchWorkstation() {
             {activeModule === "active-calls" ? (
               <ActiveCallsModule
                 calls={calls}
+                onAssignUnit={assignUnitToCall}
                 onCallSelect={setSelectedCallId}
+                onRemoveUnit={removeUnitFromCall}
                 onStatusChange={updateCallStatus}
                 selectedCall={selectedCall}
+                units={units}
               />
             ) : null}
             {activeModule === "call-creation" ? (
               <CallCreationModule form={callForm} onChange={setCallForm} onSubmit={createCall} />
             ) : null}
             {activeModule === "units" ? (
-              <UnitsModule filter={unitFilter} onFilterChange={setUnitFilter} onStatusChange={changeUnitStatus} units={units} />
+              <UnitsModule filter={unitFilter} onFilterChange={setUnitFilter} onRemoveUnit={removeUnit} onStatusChange={changeUnitStatus} units={units} />
             ) : null}
             {activeModule === "fire-ems" ? <FireEmsModule calls={calls} units={units} /> : null}
             {activeModule === "tow" ? <TowModule units={units} /> : null}
@@ -633,6 +723,7 @@ function DispatchLogin({ onSubmit }: { onSubmit: (session: DispatchSession) => v
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!dispatcherId.trim()) return;
+    unlockBrowserAudio();
     setLoggingIn(true);
     window.setTimeout(() => {
       onSubmit({
@@ -773,14 +864,20 @@ function CommandCenter({
 
 function ActiveCallsModule({
   calls,
+  onAssignUnit,
   onCallSelect,
+  onRemoveUnit,
   onStatusChange,
   selectedCall,
+  units,
 }: {
   calls: DispatchCall[];
+  onAssignUnit: (callId: string, unitId: string) => void;
   onCallSelect: (id: string) => void;
+  onRemoveUnit: (callId: string, unitId: string) => void;
   onStatusChange: (id: string, status: CallStatus) => void;
   selectedCall: DispatchCall | null;
+  units: DispatchUnit[];
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
@@ -806,19 +903,28 @@ function ActiveCallsModule({
           ))}
         </div>
       </Panel>
-      <CallDetailDrawer call={selectedCall} onStatusChange={onStatusChange} />
+      <CallDetailDrawer call={selectedCall} onAssignUnit={onAssignUnit} onRemoveUnit={onRemoveUnit} onStatusChange={onStatusChange} units={units} />
     </div>
   );
 }
 
 function CallDetailDrawer({
   call,
+  onAssignUnit,
+  onRemoveUnit,
   onStatusChange,
+  units,
 }: {
   call: DispatchCall | null;
+  onAssignUnit: (callId: string, unitId: string) => void;
+  onRemoveUnit: (callId: string, unitId: string) => void;
   onStatusChange: (id: string, status: CallStatus) => void;
+  units: DispatchUnit[];
 }) {
+  const [unitToAssign, setUnitToAssign] = useState("");
   if (!call) return <Panel title="Call Detail"><UnderConstruction text="Select a call to open the detail drawer." /></Panel>;
+  const assignedUnits = units.filter((unit) => call.assignedUnits.includes(unit.unit));
+  const availableUnits = units.filter((unit) => !call.assignedUnits.includes(unit.unit));
   return (
     <Panel title={`${call.callNumber} Detail`}>
       <div className="space-y-4">
@@ -842,9 +948,37 @@ function CallDetailDrawer({
             {callStatuses.map((status) => <option key={status}>{status}</option>)}
           </select>
         </label>
+        <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+          <p className="text-xs uppercase tracking-[0.16em] text-neutral-500">Unit Assignment</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+            <select value={unitToAssign} onChange={(event) => setUnitToAssign(event.target.value)} className="h-10 rounded-md border border-white/10 bg-neutral-900 px-2 text-sm text-white">
+              <option value="">Select unit</option>
+              {availableUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unit} / {unit.status}</option>)}
+            </select>
+            <button
+              type="button"
+              disabled={!unitToAssign}
+              onClick={() => {
+                onAssignUnit(call.id, unitToAssign);
+                setUnitToAssign("");
+              }}
+              className="min-h-10 rounded-md bg-sky-400 px-3 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Assign
+            </button>
+          </div>
+          <div className="mt-3 space-y-2">
+            {assignedUnits.length ? assignedUnits.map((unit) => (
+              <div key={unit.id} className="flex items-center justify-between gap-2 rounded border border-white/10 bg-neutral-900 px-2 py-2 text-sm">
+                <span className="font-mono text-neutral-200">{unit.unit}</span>
+                <button onClick={() => onRemoveUnit(call.id, unit.id)} className="rounded border border-white/15 px-2 py-1 text-xs text-neutral-300 hover:bg-white/10">Remove</button>
+              </div>
+            )) : <p className="text-sm text-neutral-500">No units assigned.</p>}
+          </div>
+        </div>
         <Timeline title="Timeline" items={call.timeline} />
         <Timeline title="Notes" items={call.notes} />
-        <UnderConstruction text="Unit assignment and note editing are Under Construction." />
+        <UnderConstruction text="Note editing is Under Construction." />
       </div>
     </Panel>
   );
@@ -897,11 +1031,13 @@ function CallCreationModule({
 function UnitsModule({
   filter,
   onFilterChange,
+  onRemoveUnit,
   onStatusChange,
   units,
 }: {
   filter: string;
   onFilterChange: (filter: string) => void;
+  onRemoveUnit: (id: string) => void;
   onStatusChange: (id: string, status: DispatchUnit["status"]) => void;
   units: DispatchUnit[];
 }) {
@@ -921,15 +1057,17 @@ function UnitsModule({
           </button>
         ))}
       </div>
-      <UnitTable units={filtered} onStatusChange={onStatusChange} />
+      <UnitTable units={filtered} onRemoveUnit={onRemoveUnit} onStatusChange={onStatusChange} />
     </Panel>
   );
 }
 
 function UnitTable({
+  onRemoveUnit,
   onStatusChange,
   units,
 }: {
+  onRemoveUnit?: (id: string) => void;
   onStatusChange?: (id: string, status: DispatchUnit["status"]) => void;
   units: DispatchUnit[];
 }) {
@@ -957,8 +1095,17 @@ function UnitTable({
                 </button>
               ) : null}
               <select value={unit.status} onChange={(event) => onStatusChange(unit.id, event.target.value as DispatchUnit["status"])} className="rounded border border-white/10 bg-neutral-950 px-2 text-neutral-200">
-                {["Available", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"].map((status) => <option key={status}>{status}</option>)}
+                {["Available", "Assigned", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"].map((status) => <option key={status}>{status}</option>)}
               </select>
+              {onRemoveUnit ? (
+                <button
+                  type="button"
+                  onClick={() => onRemoveUnit(unit.id)}
+                  className="rounded border border-rose-300/30 bg-rose-400/10 px-2 py-1 text-rose-100 hover:bg-rose-400/20"
+                >
+                  Remove Unit
+                </button>
+              ) : null}
             </div>
           ) : <span className="text-neutral-500">Monitor</span>}
         </div>

@@ -1,11 +1,13 @@
 "use client";
 
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   dispatchBolosToMdt,
   dispatchCallsToMdt,
   dispatchUnitsToRoster,
   loadDispatchData,
+  removeDispatchUnitByCallsign,
   searchCadRecords,
   updateDispatchCallUnits,
   updateDispatchUnitStatus,
@@ -38,6 +40,24 @@ function nowTime() {
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+}
+
+function unlockBrowserAudio() {
+  try {
+    const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const context = new AudioContextCtor();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    gain.gain.value = 0;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.01);
+    void context.resume();
+  } catch {
+    // Browser audio unlock is best-effort; visible sync notices handle failures later.
+  }
 }
 
 function statusClass(status: string) {
@@ -82,6 +102,7 @@ export function OfficerMdt() {
     { id: "log-1", message: "MDT interface ready. Awaiting Supabase/FiveM integration.", module: "System", timestamp: nowTime() },
   ]);
   const audioClientIdRef = useRef(makeId("mdt-audio"));
+  const audioChannelRef = useRef<RealtimeChannel | null>(null);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const beepContextRef = useRef<AudioContext | null>(null);
 
@@ -193,12 +214,23 @@ export function OfficerMdt() {
     addLog(`${nextSession.callsign} logged into MDT as ${nextSession.agency} ${nextSession.unitType}.`, "Login");
   }
 
-  function endSession() {
+  async function endSession() {
+    const endingSession = session;
     window.localStorage.removeItem(sessionKey);
     setSession(null);
     setPanicActive(false);
     setPanicArmed(false);
     setModule("home");
+    if (endingSession) {
+      const supabase = getSupabaseBrowserClient();
+      if (supabase) {
+        try {
+          await removeDispatchUnitByCallsign(supabase, endingSession.callsign);
+        } catch (error) {
+          setSyncNotice(error instanceof Error ? error.message : "Could not remove unit from dispatch roster.");
+        }
+      }
+    }
   }
 
   async function changeStatus(nextStatus: UnitStatus) {
@@ -289,18 +321,12 @@ export function OfficerMdt() {
   }, [stopAudio]);
 
   const broadcastAudioEvent = useCallback(async (event: "panic" | "signal-100" | "tone", payload: Record<string, unknown>) => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) return;
-    const channel = supabase.channel("cad-audio-events");
-    await channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        void channel.send({
-          event,
-          payload: { ...payload, source: audioClientIdRef.current },
-          type: "broadcast",
-        });
-        void supabase.removeChannel(channel);
-      }
+    const channel = audioChannelRef.current;
+    if (!channel) return;
+    await channel.send({
+      event,
+      payload: { ...payload, source: audioClientIdRef.current },
+      type: "broadcast",
     });
   }, []);
 
@@ -357,9 +383,15 @@ export function OfficerMdt() {
       }
     };
 
-    playIntervalBeep();
-    const intervalId = window.setInterval(playIntervalBeep, 8000);
-    return () => window.clearInterval(intervalId);
+    let intervalId = 0;
+    const timeoutId = window.setTimeout(() => {
+      playIntervalBeep();
+      intervalId = window.setInterval(playIntervalBeep, 5000);
+    }, 5000);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId) window.clearInterval(intervalId);
+    };
   }, [signal100BeepActive]);
 
   useEffect(() => {
@@ -395,8 +427,10 @@ export function OfficerMdt() {
         }
       })
       .subscribe();
+    audioChannelRef.current = channel;
 
     return () => {
+      audioChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
   }, [playEmergencyAudio, startSignal100Sequence, triggerPanicSequence]);
@@ -518,6 +552,7 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Prom
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!callsign.trim()) return;
+    unlockBrowserAudio();
     setLoggingIn(true);
     window.setTimeout(() => {
       void onSubmit({
