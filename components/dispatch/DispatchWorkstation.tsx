@@ -100,12 +100,13 @@ export function DispatchWorkstation() {
   const [toneError, setToneError] = useState("");
   const [volume, setVolume] = useState(0.85);
   const [signal100Active, setSignal100Active] = useState(false);
+  const [signal100BeepActive, setSignal100BeepActive] = useState(false);
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const beepContextRef = useRef<AudioContext | null>(null);
-  const previousEmergencyUnitIdsRef = useRef<Set<string>>(new Set());
+  const audioClientIdRef = useRef(makeId("dispatch-audio"));
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? null;
 
@@ -163,15 +164,17 @@ export function DispatchWorkstation() {
       .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_units" }, () => void refreshDispatchData())
       .on("postgres_changes", { event: "*", schema: "public", table: "bolos" }, () => void refreshDispatchData())
       .subscribe();
+    const intervalId = window.setInterval(() => void refreshDispatchData(), 2500);
 
     return () => {
       active = false;
+      window.clearInterval(intervalId);
       void supabase.removeChannel(channel);
     };
   }, [refreshDispatchData]);
 
   useEffect(() => {
-    if (!signal100Active) return;
+    if (!signal100BeepActive) return;
 
     const playIntervalBeep = () => {
       try {
@@ -197,7 +200,13 @@ export function DispatchWorkstation() {
     playIntervalBeep();
     const intervalId = window.setInterval(playIntervalBeep, 8000);
     return () => window.clearInterval(intervalId);
-  }, [signal100Active, volume]);
+  }, [signal100BeepActive, volume]);
+
+  useEffect(() => {
+    const hasEmergency = units.some((unit) => unit.status === "Panic" || unit.status === "Signal 100");
+    if (!hasEmergency) return;
+    queueMicrotask(() => setSignal100Active(true));
+  }, [units]);
 
   const addLog = useCallback((message: string, related?: string, actor?: string) => {
     setLog((current) => [
@@ -299,6 +308,12 @@ export function DispatchWorkstation() {
     try {
       await updateDispatchUnitStatus(supabase, unitId, status);
       addLog(`${unit.unit} status changed to ${status}.`, unit.assignedCall);
+      if (status === "Panic") {
+        await triggerPanicSequence(unit.unit);
+      }
+      if (status === "Signal 100") {
+        await startSignal100Sequence();
+      }
     } catch (error) {
       setSyncNotice(error instanceof Error ? error.message : "Could not update unit status.");
       await refreshDispatchData();
@@ -330,6 +345,8 @@ export function DispatchWorkstation() {
 
   function clearSignal100() {
     setSignal100Active(false);
+    setSignal100BeepActive(false);
+    void broadcastAudioEvent("signal-100", { active: false });
     addLog("Signal 100 cleared from tone board.", "Signal 100", "SYSTEM");
   }
 
@@ -359,32 +376,94 @@ export function DispatchWorkstation() {
     }
   }, [stopTones, volume]);
 
-  async function playTone(tone: ToneConfig) {
-    if (tone.id === "signal-100") {
-      setSignal100Active(true);
-    }
-    await playAudio(tone);
-    addLog(`${tone.label} played.`, tone.label, "SYSTEM");
-  }
+  const broadcastAudioEvent = useCallback(async (event: "panic" | "signal-100" | "tone", payload: Record<string, unknown>) => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    const channel = supabase.channel("cad-audio-events");
+    await channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        void channel.send({
+          event,
+          payload: { ...payload, source: audioClientIdRef.current },
+          type: "broadcast",
+        });
+        void supabase.removeChannel(channel);
+      }
+    });
+  }, []);
 
-  const triggerPanicSequence = useCallback(async (unitLabel: string) => {
+  const startSignal100Sequence = useCallback(async (broadcast = true) => {
     setSignal100Active(true);
+    setSignal100BeepActive(false);
+    if (broadcast) {
+      void broadcastAudioEvent("signal-100", { active: true });
+    }
+    await playAudio(toneById["signal-100"]);
+    setSignal100BeepActive(true);
+  }, [broadcastAudioEvent, playAudio]);
+
+  const triggerPanicSequence = useCallback(async (unitLabel: string, broadcast = true) => {
+    setSignal100Active(true);
+    setSignal100BeepActive(false);
+    if (broadcast) {
+      void broadcastAudioEvent("panic", { unitLabel });
+    }
     addLog(`Panic activated by ${unitLabel}. Signal 100 automatically started.`, unitLabel, "SYSTEM");
     await playAudio(toneById.panic);
     await playAudio(toneById["signal-100"]);
-  }, [addLog, playAudio]);
+    setSignal100BeepActive(true);
+  }, [addLog, broadcastAudioEvent, playAudio]);
+
+  async function playTone(tone: ToneConfig) {
+    if (tone.id === "signal-100") {
+      await startSignal100Sequence();
+    } else if (tone.id === "panic") {
+      await triggerPanicSequence(session?.dispatcherId ?? "Dispatch", true);
+    } else {
+      void broadcastAudioEvent("tone", { toneId: tone.id });
+      await playAudio(tone);
+    }
+    addLog(`${tone.label} played.`, tone.label, "SYSTEM");
+  }
 
   useEffect(() => {
-    const emergencyUnits = units.filter((unit) => unit.status === "Panic" || unit.status === "Signal 100");
-    const nextIds = new Set(emergencyUnits.map((unit) => unit.id));
-    const newPanicUnits = emergencyUnits.filter((unit) => unit.status === "Panic" && !previousEmergencyUnitIdsRef.current.has(unit.id));
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
 
-    previousEmergencyUnitIdsRef.current = nextIds;
+    const channel = supabase
+      .channel("cad-audio-events")
+      .on("broadcast", { event: "tone" }, ({ payload }) => {
+        const event = payload as { source?: string; toneId?: ToneConfig["id"] };
+        if (event.source === audioClientIdRef.current || !event.toneId) return;
+        const tone = toneById[event.toneId];
+        if (!tone) return;
+        if (tone.id === "signal-100") {
+          void startSignal100Sequence(false);
+        } else {
+          void playAudio(tone);
+        }
+      })
+      .on("broadcast", { event: "panic" }, ({ payload }) => {
+        const event = payload as { source?: string; unitLabel?: string };
+        if (event.source === audioClientIdRef.current) return;
+        void triggerPanicSequence(event.unitLabel || "Field unit", false);
+      })
+      .on("broadcast", { event: "signal-100" }, ({ payload }) => {
+        const event = payload as { active?: boolean; source?: string };
+        if (event.source === audioClientIdRef.current) return;
+        if (event.active) {
+          void startSignal100Sequence(false);
+        } else {
+          setSignal100Active(false);
+          setSignal100BeepActive(false);
+        }
+      })
+      .subscribe();
 
-    if (newPanicUnits.length) {
-      void triggerPanicSequence(newPanicUnits.map((unit) => unit.unit).join(", "));
-    }
-  }, [triggerPanicSequence, units]);
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [playAudio, startSignal100Sequence, triggerPanicSequence]);
 
   if (!hydrated) {
     return <div className="min-h-screen bg-neutral-950 p-6 text-neutral-300">Loading dispatch terminal...</div>;
@@ -393,8 +472,9 @@ export function DispatchWorkstation() {
   if (!session) return <DispatchLogin onSubmit={startSession} />;
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <div className="grid min-h-screen lg:grid-cols-[240px_1fr]">
+    <div className={`min-h-screen bg-neutral-950 text-neutral-100 ${signal100Active ? "ring-4 ring-inset ring-rose-500/70" : ""}`}>
+      {signal100Active ? <Signal100Banner /> : null}
+      <div className="grid min-h-screen lg:grid-cols-[64px_1fr]">
         <ModuleRail activeModule={activeModule} onModuleChange={setActiveModule} session={session} />
         <div className="min-w-0">
           <TerminalBar calls={calls} onEndSession={endSession} session={session} syncNotice={syncNotice} units={units} />
@@ -470,31 +550,42 @@ function ModuleRail({
   session: DispatchSession;
 }) {
   return (
-    <aside className="border-b border-white/10 bg-neutral-950 lg:border-b-0 lg:border-r">
-      <div className="border-b border-white/10 p-4">
-        <Link href="/cad" className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-300">
-          Sentinel CAD
+    <aside className="group/sidebar relative z-30 border-b border-white/10 bg-neutral-950 transition-all duration-200 lg:w-16 lg:overflow-hidden lg:border-b-0 lg:border-r lg:hover:w-64 lg:focus-within:w-64">
+      <div className="border-b border-white/10 p-3 lg:w-64">
+        <Link href="/cad" className="flex min-h-10 items-center gap-3 text-xs font-semibold uppercase tracking-[0.2em] text-sky-300">
+          <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-400/10 text-sm tracking-normal text-sky-200 ring-1 ring-sky-400/30">SC</span>
+          <span className="transition-opacity lg:opacity-0 lg:group-hover/sidebar:opacity-100 lg:group-focus-within/sidebar:opacity-100">Sentinel CAD</span>
         </Link>
-        <p className="mt-2 text-lg font-semibold text-white">Dispatch Terminal</p>
-        <p className="mt-1 font-mono text-xs text-neutral-500">{session.dispatcherId} / {session.channel}</p>
+        <p className="mt-2 text-lg font-semibold text-white transition-opacity lg:opacity-0 lg:group-hover/sidebar:opacity-100 lg:group-focus-within/sidebar:opacity-100">Dispatch Terminal</p>
+        <p className="mt-1 font-mono text-xs text-neutral-500 transition-opacity lg:opacity-0 lg:group-hover/sidebar:opacity-100 lg:group-focus-within/sidebar:opacity-100">{session.dispatcherId} / {session.channel}</p>
       </div>
-      <nav className="flex gap-2 overflow-x-auto p-3 lg:block lg:space-y-1 lg:overflow-visible">
+      <nav className="flex gap-2 overflow-x-auto p-3 lg:block lg:w-64 lg:space-y-1 lg:overflow-visible">
         {modules.map((module) => (
           <button
             key={module.id}
             type="button"
             onClick={() => onModuleChange(module.id)}
-            className={`block w-full shrink-0 rounded-md px-3 py-2 text-left text-sm font-medium ${
+            title={module.label}
+            className={`flex min-h-10 w-full shrink-0 items-center gap-3 rounded-md px-2 text-left text-sm font-medium ${
               activeModule === module.id
                 ? "bg-sky-400 text-neutral-950"
                 : "text-neutral-300 hover:bg-white/10 hover:text-white"
             }`}
           >
-            {module.label}
+            <span className="grid size-8 shrink-0 place-items-center rounded bg-white/[0.06] text-xs font-bold">{module.label.slice(0, 2).toUpperCase()}</span>
+            <span className="transition-opacity lg:opacity-0 lg:group-hover/sidebar:opacity-100 lg:group-focus-within/sidebar:opacity-100">{module.label}</span>
           </button>
         ))}
       </nav>
     </aside>
+  );
+}
+
+function Signal100Banner() {
+  return (
+    <div className="border-b border-rose-300/40 bg-rose-600 px-4 py-2 text-center text-sm font-black uppercase tracking-[0.2em] text-white shadow-lg shadow-rose-950/40">
+      Signal 100 In Effect
+    </div>
   );
 }
 

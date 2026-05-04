@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   dispatchBolosToMdt,
   dispatchCallsToMdt,
@@ -41,7 +41,7 @@ function makeId(prefix: string) {
 }
 
 function statusClass(status: string) {
-  if (status === "Panic") return "border-rose-300/50 bg-rose-400/20 text-rose-100";
+  if (status === "Panic" || status === "Signal 100") return "border-rose-300/50 bg-rose-400/20 text-rose-100";
   if (status === "Available") return "border-emerald-300/35 bg-emerald-400/10 text-emerald-100";
   if (["Enroute", "On Scene", "Transporting", "Staging", "At Hospital"].includes(status)) {
     return "border-sky-300/35 bg-sky-400/10 text-sky-100";
@@ -76,9 +76,18 @@ export function OfficerMdt() {
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [panicArmed, setPanicArmed] = useState(false);
   const [panicActive, setPanicActive] = useState(false);
+  const [signal100Active, setSignal100Active] = useState(false);
+  const [signal100BeepActive, setSignal100BeepActive] = useState(false);
   const [log, setLog] = useState<ActivityLogEntry[]>([
     { id: "log-1", message: "MDT interface ready. Awaiting Supabase/FiveM integration.", module: "System", timestamp: nowTime() },
   ]);
+  const audioClientIdRef = useRef(makeId("mdt-audio"));
+  const audioRefs = useRef<HTMLAudioElement[]>([]);
+  const beepContextRef = useRef<AudioContext | null>(null);
+
+  function addLog(message: string, logModule = "MDT") {
+    setLog((current) => [{ id: makeId("log"), message, module: logModule, timestamp: nowTime() }, ...current]);
+  }
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -129,8 +138,10 @@ export function OfficerMdt() {
       .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_units" }, () => void refresh())
       .on("postgres_changes", { event: "*", schema: "public", table: "bolos" }, () => void refresh())
       .subscribe();
+    const intervalId = window.setInterval(() => void refresh(), 2500);
 
     return () => {
+      window.clearInterval(intervalId);
       void supabase.removeChannel(channel);
     };
   }, []);
@@ -144,6 +155,7 @@ export function OfficerMdt() {
     if (currentUnit.status === "Panic") {
       queueMicrotask(() => {
         setPanicActive(true);
+        setSignal100Active(true);
         setStatus("Panic");
       });
       return;
@@ -153,14 +165,16 @@ export function OfficerMdt() {
         setPanicActive(false);
         setPanicArmed(false);
         setStatus(currentUnit.status);
-        addLog("Dispatcher cleared this unit's panic status.", "Panic");
+        setLog((current) => [{ id: makeId("log"), message: "Dispatcher cleared this unit's panic status.", module: "Panic", timestamp: nowTime() }, ...current]);
       });
     }
   }, [panicActive, roster, session]);
 
-  function addLog(message: string, logModule = "MDT") {
-    setLog((current) => [{ id: makeId("log"), message, module: logModule, timestamp: nowTime() }, ...current]);
-  }
+  useEffect(() => {
+    const hasSignal100 = roster.some((unit) => unit.status === "Panic" || unit.status === "Signal 100");
+    if (!hasSignal100) return;
+    queueMicrotask(() => setSignal100Active(true));
+  }, [roster]);
 
   async function startSession(nextSession: MdtSession) {
     window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
@@ -251,18 +265,19 @@ export function OfficerMdt() {
     addLog(`Detached from ${call.callNumber}.`, "Active Calls");
   }
 
-  async function activatePanic() {
-    setPanicActive(true);
-    setPanicArmed(false);
-    await playEmergencyAudio(toneById.panic);
-    await playEmergencyAudio(toneById["signal-100"]);
-    await changeStatus("Panic");
-    addLog("Emergency panic activated and synced to dispatch.", "Panic");
-  }
+  const stopAudio = useCallback(() => {
+    audioRefs.current.forEach((audio) => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+    audioRefs.current = [];
+  }, []);
 
-  async function playEmergencyAudio(tone: ToneConfig) {
+  const playEmergencyAudio = useCallback(async (tone: ToneConfig) => {
+    stopAudio();
     const audio = new Audio(tone.path);
     audio.volume = Math.min(1, Math.max(0, tone.volume * 0.9));
+    audioRefs.current = [audio];
     try {
       await audio.play();
       await new Promise<void>((resolve) => {
@@ -271,7 +286,120 @@ export function OfficerMdt() {
     } catch {
       setSyncNotice(`${tone.label} audio could not play in this browser.`);
     }
+  }, [stopAudio]);
+
+  const broadcastAudioEvent = useCallback(async (event: "panic" | "signal-100" | "tone", payload: Record<string, unknown>) => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    const channel = supabase.channel("cad-audio-events");
+    await channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        void channel.send({
+          event,
+          payload: { ...payload, source: audioClientIdRef.current },
+          type: "broadcast",
+        });
+        void supabase.removeChannel(channel);
+      }
+    });
+  }, []);
+
+  const startSignal100Sequence = useCallback(async (broadcast = true) => {
+    setSignal100Active(true);
+    setSignal100BeepActive(false);
+    if (broadcast) {
+      void broadcastAudioEvent("signal-100", { active: true });
+    }
+    await playEmergencyAudio(toneById["signal-100"]);
+    setSignal100BeepActive(true);
+  }, [broadcastAudioEvent, playEmergencyAudio]);
+
+  const triggerPanicSequence = useCallback(async (unitLabel: string, broadcast = true) => {
+    setSignal100Active(true);
+    setSignal100BeepActive(false);
+    if (broadcast) {
+      void broadcastAudioEvent("panic", { unitLabel });
+    }
+    await playEmergencyAudio(toneById.panic);
+    await playEmergencyAudio(toneById["signal-100"]);
+    setSignal100BeepActive(true);
+  }, [broadcastAudioEvent, playEmergencyAudio]);
+
+  async function activatePanic() {
+    setPanicActive(true);
+    setPanicArmed(false);
+    void triggerPanicSequence(session?.callsign ?? "Field unit");
+    await changeStatus("Panic");
+    addLog("Emergency panic activated and synced to dispatch.", "Panic");
   }
+
+  useEffect(() => {
+    if (!signal100BeepActive) return;
+
+    const playIntervalBeep = () => {
+      try {
+        const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextCtor) return;
+        const context = beepContextRef.current ?? new AudioContextCtor();
+        beepContextRef.current = context;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.value = 880;
+        gain.gain.value = 0.03;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.16);
+      } catch {
+        setSyncNotice("Signal 100 interval beep could not play in this browser.");
+      }
+    };
+
+    playIntervalBeep();
+    const intervalId = window.setInterval(playIntervalBeep, 8000);
+    return () => window.clearInterval(intervalId);
+  }, [signal100BeepActive]);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel("cad-audio-events")
+      .on("broadcast", { event: "tone" }, ({ payload }) => {
+        const event = payload as { source?: string; toneId?: ToneConfig["id"] };
+        if (event.source === audioClientIdRef.current || !event.toneId) return;
+        const tone = toneById[event.toneId];
+        if (!tone) return;
+        if (tone.id === "signal-100") {
+          void startSignal100Sequence(false);
+        } else {
+          void playEmergencyAudio(tone);
+        }
+      })
+      .on("broadcast", { event: "panic" }, ({ payload }) => {
+        const event = payload as { source?: string; unitLabel?: string };
+        if (event.source === audioClientIdRef.current) return;
+        void triggerPanicSequence(event.unitLabel || "Field unit", false);
+      })
+      .on("broadcast", { event: "signal-100" }, ({ payload }) => {
+        const event = payload as { active?: boolean; source?: string };
+        if (event.source === audioClientIdRef.current) return;
+        if (event.active) {
+          void startSignal100Sequence(false);
+        } else {
+          setSignal100Active(false);
+          setSignal100BeepActive(false);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [playEmergencyAudio, startSignal100Sequence, triggerPanicSequence]);
 
   async function runLookup(query: string) {
     addLog(`Lookup submitted: ${query}.`, "Lookups");
@@ -298,21 +426,28 @@ export function OfficerMdt() {
   const assignedCall = calls.find((call) => call.units.includes(session.callsign)) ?? null;
 
   return (
-    <div className={`min-h-screen bg-[#07090c] text-neutral-100 ${panicActive ? "ring-4 ring-inset ring-rose-500/60" : ""}`}>
-      <div className="grid min-h-screen xl:grid-cols-[238px_1fr]">
-        <aside className="border-b border-white/10 bg-neutral-950 xl:border-b-0 xl:border-r">
-          <div className="border-b border-white/10 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-300">Sentinel CAD</p>
-            <h1 className="mt-2 text-lg font-semibold text-white">Officer MDT</h1>
-            <p className="mt-1 font-mono text-xs text-neutral-500">{session.callsign} / {session.agency}</p>
+    <div className={`min-h-screen bg-[#07090c] text-neutral-100 ${panicActive || signal100Active ? "ring-4 ring-inset ring-rose-500/70" : ""}`}>
+      {signal100Active ? <Signal100Banner /> : null}
+      <div className="grid min-h-screen xl:grid-cols-[64px_1fr]">
+        <aside className="group/sidebar relative z-30 border-b border-white/10 bg-neutral-950 transition-all duration-200 xl:w-16 xl:overflow-hidden xl:border-b-0 xl:border-r xl:hover:w-64 xl:focus-within:w-64">
+          <div className="border-b border-white/10 p-3 xl:w-64">
+            <div className="flex min-h-10 items-center gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-400/10 text-sm font-bold text-sky-200 ring-1 ring-sky-400/30">MD</span>
+              <div className="transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-300">Sentinel CAD</p>
+                <h1 className="mt-1 text-lg font-semibold text-white">Officer MDT</h1>
+              </div>
+            </div>
+            <p className="mt-2 font-mono text-xs text-neutral-500 transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">{session.callsign} / {session.agency}</p>
           </div>
-          <nav className="flex gap-2 overflow-x-auto p-3 xl:block xl:space-y-1 xl:overflow-visible">
+          <nav className="flex gap-2 overflow-x-auto p-3 xl:block xl:w-64 xl:space-y-1 xl:overflow-visible">
             {visibleModules.map((item) => (
               <button
                 key={item.id}
                 type="button"
+                title={item.label}
                 onClick={() => setModule(item.id)}
-                className={`block min-h-10 w-full shrink-0 rounded-md px-3 text-left text-sm font-medium ${
+                className={`flex min-h-10 w-full shrink-0 items-center gap-3 rounded-md px-2 text-left text-sm font-medium ${
                   module === item.id
                     ? item.id === "panic"
                       ? "bg-rose-500 text-white"
@@ -322,7 +457,8 @@ export function OfficerMdt() {
                       : "text-neutral-300 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                {item.label}
+                <span className="grid size-8 shrink-0 place-items-center rounded bg-white/[0.06] text-xs font-bold">{item.label.slice(0, 2).toUpperCase()}</span>
+                <span className="transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">{item.label}</span>
               </button>
             ))}
           </nav>
@@ -498,6 +634,14 @@ function TopStatusBar({
         </div>
       </div>
     </header>
+  );
+}
+
+function Signal100Banner() {
+  return (
+    <div className="border-b border-rose-300/40 bg-rose-600 px-4 py-2 text-center text-sm font-black uppercase tracking-[0.2em] text-white shadow-lg shadow-rose-950/40">
+      Signal 100 In Effect
+    </div>
   );
 }
 

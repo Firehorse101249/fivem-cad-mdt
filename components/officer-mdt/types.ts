@@ -28,6 +28,7 @@ export type UnitStatus =
   | "At Station"
   | "Out of Service"
   | "Panic"
+  | "Signal 100"
   | "Staging"
   | "Rehab"
   | "At Hospital";
