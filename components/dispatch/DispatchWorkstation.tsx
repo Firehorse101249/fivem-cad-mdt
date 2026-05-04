@@ -50,6 +50,14 @@ const priorities: Priority[] = ["Low", "Medium", "High", "Critical"];
 const serviceTypes: ServiceType[] = ["Law Enforcement", "Fire", "EMS", "Tow", "Multi-agency"];
 const boloTypes: BoloType[] = ["Person", "Vehicle", "Weapon", "Officer safety", "Missing person", "Stolen vehicle"];
 const toneById = Object.fromEntries(toneConfig.map((tone) => [tone.id, tone])) as Record<ToneConfig["id"], ToneConfig>;
+const dispatchSessionKey = "sentinel-dispatch-session";
+
+type DispatchSession = {
+  channel: string;
+  dispatcherId: string;
+  dispatcherName: string;
+  shiftStartedAt: string;
+};
 
 function nowTime() {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
@@ -74,6 +82,8 @@ function statusClass(status: string) {
 }
 
 export function DispatchWorkstation() {
+  const [session, setSession] = useState<DispatchSession | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [activeModule, setActiveModule] = useState<DispatchModule>("command-center");
   const [calls, setCalls] = useState<DispatchCall[]>([]);
   const [units, setUnits] = useState<DispatchUnit[]>([]);
@@ -98,6 +108,20 @@ export function DispatchWorkstation() {
   const previousEmergencyUnitIdsRef = useRef<Set<string>>(new Set());
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? null;
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      const stored = window.localStorage.getItem(dispatchSessionKey);
+      if (stored) {
+        try {
+          setSession(JSON.parse(stored) as DispatchSession);
+        } catch {
+          window.localStorage.removeItem(dispatchSessionKey);
+        }
+      }
+      setHydrated(true);
+    });
+  }, []);
 
   const refreshDispatchData = useCallback(async (nextSelectedCallId = "") => {
     const supabase = getSupabaseBrowserClient();
@@ -175,12 +199,24 @@ export function DispatchWorkstation() {
     return () => window.clearInterval(intervalId);
   }, [signal100Active, volume]);
 
-  const addLog = useCallback((message: string, related?: string, actor = "DISP-01") => {
+  const addLog = useCallback((message: string, related?: string, actor?: string) => {
     setLog((current) => [
-      { actor, id: makeId("log"), message, related, timestamp: nowTime() },
+      { actor: actor ?? session?.dispatcherId ?? "DISPATCH", id: makeId("log"), message, related, timestamp: nowTime() },
       ...current,
     ]);
-  }, []);
+  }, [session?.dispatcherId]);
+
+  function startSession(nextSession: DispatchSession) {
+    window.localStorage.setItem(dispatchSessionKey, JSON.stringify(nextSession));
+    setSession(nextSession);
+    addLog(`${nextSession.dispatcherId} signed into dispatch on ${nextSession.channel}.`, "Dispatch Login", nextSession.dispatcherId);
+  }
+
+  function endSession() {
+    window.localStorage.removeItem(dispatchSessionKey);
+    setSession(null);
+    setActiveModule("command-center");
+  }
 
   async function updateCallStatus(callId: string, status: CallStatus) {
     const supabase = getSupabaseBrowserClient();
@@ -350,12 +386,18 @@ export function DispatchWorkstation() {
     }
   }, [triggerPanicSequence, units]);
 
+  if (!hydrated) {
+    return <div className="min-h-screen bg-neutral-950 p-6 text-neutral-300">Loading dispatch terminal...</div>;
+  }
+
+  if (!session) return <DispatchLogin onSubmit={startSession} />;
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="grid min-h-screen lg:grid-cols-[240px_1fr]">
-        <ModuleRail activeModule={activeModule} onModuleChange={setActiveModule} />
+        <ModuleRail activeModule={activeModule} onModuleChange={setActiveModule} session={session} />
         <div className="min-w-0">
-          <TerminalBar calls={calls} syncNotice={syncNotice} units={units} />
+          <TerminalBar calls={calls} onEndSession={endSession} session={session} syncNotice={syncNotice} units={units} />
           <main className="h-[calc(100vh-76px)] overflow-y-auto p-4">
             {activeModule === "command-center" ? (
               <CommandCenter
@@ -421,9 +463,11 @@ export function DispatchWorkstation() {
 function ModuleRail({
   activeModule,
   onModuleChange,
+  session,
 }: {
   activeModule: DispatchModule;
   onModuleChange: (module: DispatchModule) => void;
+  session: DispatchSession;
 }) {
   return (
     <aside className="border-b border-white/10 bg-neutral-950 lg:border-b-0 lg:border-r">
@@ -432,7 +476,7 @@ function ModuleRail({
           Sentinel CAD
         </Link>
         <p className="mt-2 text-lg font-semibold text-white">Dispatch Terminal</p>
-        <p className="mt-1 text-xs text-neutral-500">Fictional FiveM workstation</p>
+        <p className="mt-1 font-mono text-xs text-neutral-500">{session.dispatcherId} / {session.channel}</p>
       </div>
       <nav className="flex gap-2 overflow-x-auto p-3 lg:block lg:space-y-1 lg:overflow-visible">
         {modules.map((module) => (
@@ -454,14 +498,27 @@ function ModuleRail({
   );
 }
 
-function TerminalBar({ calls, syncNotice, units }: { calls: DispatchCall[]; syncNotice: string; units: DispatchUnit[] }) {
+function TerminalBar({
+  calls,
+  onEndSession,
+  session,
+  syncNotice,
+  units,
+}: {
+  calls: DispatchCall[];
+  onEndSession: () => void;
+  session: DispatchSession;
+  syncNotice: string;
+  units: DispatchUnit[];
+}) {
   const panicCount = units.filter((unit) => unit.status === "Panic" || unit.status === "Signal 100").length;
   return (
     <header className="border-b border-white/10 bg-neutral-900 px-4 py-3">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.22em] text-neutral-500">Terminal Session</p>
-          <h1 className="text-xl font-semibold text-white">Los Santos Dispatch Workstation</h1>
+          <h1 className="text-xl font-semibold text-white">{session.dispatcherName} - {session.dispatcherId}</h1>
+          <p className="mt-1 font-mono text-xs text-neutral-500">{session.channel} / Shift {session.shiftStartedAt}</p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
           <Pill>Primary Channel</Pill>
@@ -469,9 +526,94 @@ function TerminalBar({ calls, syncNotice, units }: { calls: DispatchCall[]; sync
           <Pill>{units.filter((unit) => unit.status === "Available").length} Available Units</Pill>
           <Pill critical={panicCount > 0}>{panicCount} Emergency Flags</Pill>
           <Pill>{syncNotice}</Pill>
+          <button onClick={onEndSession} className="rounded-md border border-white/15 px-3 py-1 text-neutral-300 hover:bg-white/10">End Shift</button>
         </div>
       </div>
     </header>
+  );
+}
+
+function DispatchLogin({ onSubmit }: { onSubmit: (session: DispatchSession) => void }) {
+  const [dispatcherId, setDispatcherId] = useState("");
+  const [dispatcherName, setDispatcherName] = useState("");
+  const [channel, setChannel] = useState("Primary Dispatch");
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!dispatcherId.trim()) return;
+    setLoggingIn(true);
+    window.setTimeout(() => {
+      onSubmit({
+        channel,
+        dispatcherId: dispatcherId.trim().toUpperCase(),
+        dispatcherName: dispatcherName.trim() || "Dispatch Operator",
+        shiftStartedAt: nowTime(),
+      });
+    }, 500);
+  }
+
+  return (
+    <div className="min-h-screen bg-[#06080b] px-4 py-6 text-neutral-100">
+      <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-6xl items-center">
+        <div className="grid w-full gap-5 lg:grid-cols-[0.95fr_1.05fr]">
+          <section className="border border-white/10 bg-neutral-950 p-5 shadow-2xl shadow-black/40">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-300">Dispatch Workstation</p>
+            <h1 className="mt-3 text-3xl font-semibold text-white">Sign Into Dispatch</h1>
+            <p className="mt-3 text-sm leading-6 text-neutral-400">
+              Start a dispatcher shift before opening the live CAD workstation. Calls, units, BOLOs, tones, and Signal 100 controls sync through Supabase after sign-in.
+            </p>
+            <div className="mt-6 grid gap-3 text-sm">
+              <Info label="Console" value="CAD dispatch terminal" />
+              <Info label="Network" value="Supabase CAD sync" />
+              <Info label="Shift Control" value="Sign in initializes the dispatcher session" />
+            </div>
+          </section>
+
+          <form onSubmit={submit} className="border border-white/10 bg-neutral-900 p-5 shadow-2xl shadow-black/40">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block md:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Dispatcher ID</span>
+                <input
+                  value={dispatcherId}
+                  onChange={(event) => setDispatcherId(event.target.value)}
+                  required
+                  className="mt-2 h-12 w-full border border-white/10 bg-neutral-950 px-3 font-mono text-lg text-white"
+                  placeholder="DISP-01"
+                />
+              </label>
+              <label className="block md:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Dispatcher Name</span>
+                <input
+                  value={dispatcherName}
+                  onChange={(event) => setDispatcherName(event.target.value)}
+                  className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white"
+                  placeholder="Last, First"
+                />
+              </label>
+              <label className="block md:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Channel Assignment</span>
+                <select value={channel} onChange={(event) => setChannel(event.target.value)} className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white">
+                  <option>Primary Dispatch</option>
+                  <option>Law Enforcement</option>
+                  <option>Fire/EMS</option>
+                  <option>Tow / Services</option>
+                  <option>Supervisor</option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button type="submit" className="min-h-12 bg-sky-400 px-5 text-sm font-bold text-neutral-950 hover:bg-sky-300">
+                {loggingIn ? "Signing into dispatch..." : "Open Dispatch"}
+              </button>
+            </div>
+            <p className="mt-4 border border-dashed border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-sm text-amber-100">
+              FiveM dispatcher duty bridge -- Under Construction
+            </p>
+          </form>
+        </div>
+      </div>
+    </div>
   );
 }
 

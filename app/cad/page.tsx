@@ -21,7 +21,7 @@ export default function CadDashboardPage() {
             {[
               ["0", "Active calls"],
               ["0", "Online units"],
-              ["11", "Modules"],
+              [String(cadSections.length), "Modules"],
             ].map(([value, label]) => (
               <div key={label} className="rounded-md border border-white/10 bg-neutral-950 p-4">
                 <div className="text-2xl font-semibold text-white">{value}</div>
