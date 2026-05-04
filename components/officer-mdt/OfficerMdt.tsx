@@ -13,6 +13,7 @@ import {
   type CadLookupResult,
 } from "@/app/_lib/cad-data";
 import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
+import { toneConfig, type ToneConfig } from "@/components/dispatch/toneConfig";
 import {
   agencyOptions,
   agencyUnitTypes,
@@ -29,6 +30,7 @@ import {
 import type { ActivityLogEntry, Agency, Bolo, LookupTab, MdtCall, MdtSession, OfficerModule, UnitRosterEntry, UnitStatus } from "./types";
 
 const sessionKey = "sentinel-officer-mdt-session";
+const toneById = Object.fromEntries(toneConfig.map((tone) => [tone.id, tone])) as Record<ToneConfig["id"], ToneConfig>;
 
 function nowTime() {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
@@ -135,6 +137,27 @@ export function OfficerMdt() {
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? calls[0] ?? null;
 
+  useEffect(() => {
+    if (!session) return;
+    const currentUnit = roster.find((unit) => unit.callsign === session.callsign);
+    if (!currentUnit) return;
+    if (currentUnit.status === "Panic") {
+      queueMicrotask(() => {
+        setPanicActive(true);
+        setStatus("Panic");
+      });
+      return;
+    }
+    if (panicActive) {
+      queueMicrotask(() => {
+        setPanicActive(false);
+        setPanicArmed(false);
+        setStatus(currentUnit.status);
+        addLog("Dispatcher cleared this unit's panic status.", "Panic");
+      });
+    }
+  }, [panicActive, roster, session]);
+
   function addLog(message: string, logModule = "MDT") {
     setLog((current) => [{ id: makeId("log"), message, module: logModule, timestamp: nowTime() }, ...current]);
   }
@@ -231,8 +254,23 @@ export function OfficerMdt() {
   async function activatePanic() {
     setPanicActive(true);
     setPanicArmed(false);
+    await playEmergencyAudio(toneById.panic);
+    await playEmergencyAudio(toneById["signal-100"]);
     await changeStatus("Panic");
     addLog("Emergency panic activated and synced to dispatch.", "Panic");
+  }
+
+  async function playEmergencyAudio(tone: ToneConfig) {
+    const audio = new Audio(tone.path);
+    audio.volume = Math.min(1, Math.max(0, tone.volume * 0.9));
+    try {
+      await audio.play();
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+      });
+    } catch {
+      setSyncNotice(`${tone.label} audio could not play in this browser.`);
+    }
   }
 
   async function runLookup(query: string) {

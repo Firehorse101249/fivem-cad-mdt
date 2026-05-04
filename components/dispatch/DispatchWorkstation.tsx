@@ -16,7 +16,7 @@ import {
   incidentTypes,
   initialCallForm,
 } from "./mockDispatchData";
-import { toneConfig } from "./toneConfig";
+import { toneConfig, type ToneConfig } from "./toneConfig";
 import type {
   Bolo,
   BoloType,
@@ -49,6 +49,7 @@ const callStatuses: CallStatus[] = ["Pending", "Assigned", "Enroute", "On Scene"
 const priorities: Priority[] = ["Low", "Medium", "High", "Critical"];
 const serviceTypes: ServiceType[] = ["Law Enforcement", "Fire", "EMS", "Tow", "Multi-agency"];
 const boloTypes: BoloType[] = ["Person", "Vehicle", "Weapon", "Officer safety", "Missing person", "Stolen vehicle"];
+const toneById = Object.fromEntries(toneConfig.map((tone) => [tone.id, tone])) as Record<ToneConfig["id"], ToneConfig>;
 
 function nowTime() {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
@@ -87,11 +88,14 @@ export function DispatchWorkstation() {
   const [boloFilter, setBoloFilter] = useState("All");
   const [playingTone, setPlayingTone] = useState("");
   const [toneError, setToneError] = useState("");
-  const [volume, setVolume] = useState(0.65);
+  const [volume, setVolume] = useState(0.85);
+  const [signal100Active, setSignal100Active] = useState(false);
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
+  const beepContextRef = useRef<AudioContext | null>(null);
+  const previousEmergencyUnitIdsRef = useRef<Set<string>>(new Set());
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? null;
 
@@ -142,12 +146,41 @@ export function DispatchWorkstation() {
     };
   }, [refreshDispatchData]);
 
-  function addLog(message: string, related?: string, actor = "DISP-01") {
+  useEffect(() => {
+    if (!signal100Active) return;
+
+    const playIntervalBeep = () => {
+      try {
+        const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextCtor) return;
+        const context = beepContextRef.current ?? new AudioContextCtor();
+        beepContextRef.current = context;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.value = 880;
+        gain.gain.value = 0.035 * volume;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.16);
+      } catch {
+        setToneError("Signal 100 interval beep could not play in this browser.");
+      }
+    };
+
+    playIntervalBeep();
+    const intervalId = window.setInterval(playIntervalBeep, 8000);
+    return () => window.clearInterval(intervalId);
+  }, [signal100Active, volume]);
+
+  const addLog = useCallback((message: string, related?: string, actor = "DISP-01") => {
     setLog((current) => [
       { actor, id: makeId("log"), message, related, timestamp: nowTime() },
       ...current,
     ]);
-  }
+  }, []);
 
   async function updateCallStatus(callId: string, status: CallStatus) {
     const supabase = getSupabaseBrowserClient();
@@ -250,36 +283,72 @@ export function DispatchWorkstation() {
     }
   }
 
-  function stopTones() {
+  const stopTones = useCallback(() => {
     audioRefs.current.forEach((audio) => {
       audio.pause();
       audio.currentTime = 0;
     });
     audioRefs.current = [];
     setPlayingTone("");
+  }, []);
+
+  function clearSignal100() {
+    setSignal100Active(false);
+    addLog("Signal 100 cleared from tone board.", "Signal 100", "SYSTEM");
   }
 
-  async function playTone(label: string, path: string) {
+  const playAudio = useCallback(async (tone: ToneConfig) => {
     stopTones();
     setToneError("");
-    const audio = new Audio(path);
-    audio.volume = volume;
+    const audio = new Audio(tone.path);
+    audio.volume = Math.min(1, Math.max(0, tone.volume * volume));
     audioRefs.current = [audio];
-    setPlayingTone(label);
-    audio.onended = () => setPlayingTone("");
+    setPlayingTone(tone.label);
     audio.onerror = () => {
-      setToneError(`${label} audio file missing at ${path}. Add your own legally usable tone file.`);
+      setToneError(`${tone.label} audio file missing at ${tone.path}.`);
       setPlayingTone("");
     };
 
     try {
       await audio.play();
-      addLog(`${label} played.`, label, "SYSTEM");
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          setPlayingTone("");
+          resolve();
+        };
+      });
     } catch {
-      setToneError(`${label} could not play. Browser blocked playback or file is missing.`);
+      setToneError(`${tone.label} could not play. Browser blocked playback or file is missing.`);
       setPlayingTone("");
     }
+  }, [stopTones, volume]);
+
+  async function playTone(tone: ToneConfig) {
+    if (tone.id === "signal-100") {
+      setSignal100Active(true);
+    }
+    await playAudio(tone);
+    addLog(`${tone.label} played.`, tone.label, "SYSTEM");
   }
+
+  const triggerPanicSequence = useCallback(async (unitLabel: string) => {
+    setSignal100Active(true);
+    addLog(`Panic activated by ${unitLabel}. Signal 100 automatically started.`, unitLabel, "SYSTEM");
+    await playAudio(toneById.panic);
+    await playAudio(toneById["signal-100"]);
+  }, [addLog, playAudio]);
+
+  useEffect(() => {
+    const emergencyUnits = units.filter((unit) => unit.status === "Panic" || unit.status === "Signal 100");
+    const nextIds = new Set(emergencyUnits.map((unit) => unit.id));
+    const newPanicUnits = emergencyUnits.filter((unit) => unit.status === "Panic" && !previousEmergencyUnitIdsRef.current.has(unit.id));
+
+    previousEmergencyUnitIdsRef.current = nextIds;
+
+    if (newPanicUnits.length) {
+      void triggerPanicSequence(newPanicUnits.map((unit) => unit.unit).join(", "));
+    }
+  }, [triggerPanicSequence, units]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -329,9 +398,11 @@ export function DispatchWorkstation() {
             {activeModule === "lookups" ? <LookupModule onSearch={runLookup} results={lookupResults} /> : null}
             {activeModule === "tone-board" ? (
               <ToneBoardModule
-                onPlayTone={(label, path) => void playTone(label, path)}
+                onClearSignal100={clearSignal100}
+                onPlayTone={(tone) => void playTone(tone)}
                 onStop={stopTones}
                 playingTone={playingTone}
+                signal100Active={signal100Active}
                 toneError={toneError}
                 volume={volume}
                 onVolumeChange={setVolume}
@@ -642,9 +713,20 @@ function UnitTable({
           <span className="text-neutral-300">{unit.assignedCall}</span>
           <span className="text-neutral-400">{unit.lastUpdate}</span>
           {onStatusChange ? (
-            <select value={unit.status} onChange={(event) => onStatusChange(unit.id, event.target.value as DispatchUnit["status"])} className="rounded border border-white/10 bg-neutral-950 px-2 text-neutral-200">
-              {["Available", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"].map((status) => <option key={status}>{status}</option>)}
-            </select>
+            <div className="flex flex-col gap-1">
+              {(unit.status === "Panic" || unit.status === "Signal 100") ? (
+                <button
+                  type="button"
+                  onClick={() => onStatusChange(unit.id, "Available")}
+                  className="rounded border border-emerald-300/30 bg-emerald-300/10 px-2 py-1 text-emerald-100 hover:bg-emerald-300/20"
+                >
+                  Clear Panic
+                </button>
+              ) : null}
+              <select value={unit.status} onChange={(event) => onStatusChange(unit.id, event.target.value as DispatchUnit["status"])} className="rounded border border-white/10 bg-neutral-950 px-2 text-neutral-200">
+                {["Available", "Busy", "Enroute", "On Scene", "Transporting", "At Hospital", "Requested", "Towing", "Complete", "Out of Service", "Panic", "Signal 100"].map((status) => <option key={status}>{status}</option>)}
+              </select>
+            </div>
           ) : <span className="text-neutral-500">Monitor</span>}
         </div>
       ))}
@@ -783,17 +865,21 @@ function LookupModule({ onSearch, results }: { onSearch: (label: string, query: 
 }
 
 function ToneBoardModule({
+  onClearSignal100,
   onPlayTone,
   onStop,
   onVolumeChange,
   playingTone,
+  signal100Active,
   toneError,
   volume,
 }: {
-  onPlayTone: (label: string, path: string) => void;
+  onClearSignal100: () => void;
+  onPlayTone: (tone: ToneConfig) => void;
   onStop: () => void;
   onVolumeChange: (value: number) => void;
   playingTone: string;
+  signal100Active: boolean;
   toneError: string;
   volume: number;
 }) {
@@ -801,21 +887,23 @@ function ToneBoardModule({
     <Panel title="Tone Board">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm text-neutral-400">Browser Audio API playback. Add your own legal audio files.</p>
+          <p className="text-sm text-neutral-400">Station tones, EMS tone, panic alert, and Signal 100 audio.</p>
           {playingTone ? <p className="mt-1 text-sm font-semibold text-sky-200">Playing: {playingTone}</p> : null}
+          {signal100Active ? <p className="mt-1 text-sm font-semibold text-rose-100">Signal 100 in effect. Low interval beep active.</p> : null}
         </div>
         <div className="flex items-center gap-3">
-          <label className="text-xs text-neutral-400">Volume</label>
+          <label className="text-xs text-neutral-400">Master</label>
           <input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => onVolumeChange(Number(event.target.value))} />
-          <button onClick={onStop} className="rounded-md border border-white/15 px-3 py-2 text-xs text-neutral-200 hover:bg-white/10">Stop All Tones</button>
+          <button onClick={onStop} className="rounded-md border border-white/15 px-3 py-2 text-xs text-neutral-200 hover:bg-white/10">Stop Current</button>
+          <button onClick={onClearSignal100} className="rounded-md border border-rose-300/35 bg-rose-400/10 px-3 py-2 text-xs text-rose-100 hover:bg-rose-400/20">Clear Signal 100</button>
         </div>
       </div>
       {toneError ? <div className="mb-4 rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">{toneError}</div> : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {toneConfig.map((tone) => (
           <button
             key={tone.label}
-            onClick={() => onPlayTone(tone.label, tone.path)}
+            onClick={() => onPlayTone(tone)}
             className={`min-h-20 rounded-md border px-4 text-sm font-bold ${
               tone.critical
                 ? "border-rose-300/40 bg-rose-400/15 text-rose-100"
@@ -824,7 +912,8 @@ function ToneBoardModule({
                   : "border-sky-300/25 bg-sky-300/10 text-sky-100"
             } ${playingTone === tone.label ? "ring-2 ring-white/50" : ""}`}
           >
-            {tone.label}
+            <span className="block">{tone.label}</span>
+            <span className="mt-1 block text-xs font-medium opacity-70">{Math.round(tone.volume * volume * 100)}% output</span>
           </button>
         ))}
       </div>

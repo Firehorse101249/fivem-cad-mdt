@@ -1,18 +1,15 @@
 export type ToneConfig = {
   critical?: boolean;
+  id: "ems" | "fire" | "panic" | "signal-100";
   label: string;
   path: string;
+  volume: number;
   warning?: boolean;
 };
 
 export const toneConfig: ToneConfig[] = [
-  { label: "Fire Tone", path: "/audio/tones/fire-tone.mp3" },
-  { label: "EMS Tone", path: "/audio/tones/ems-tone.mp3" },
-  { label: "All Call", path: "/audio/tones/all-call.mp3" },
-  { critical: true, label: "Signal 100", path: "/audio/tones/signal-100.mp3" },
-  { critical: true, label: "Panic Alert", path: "/audio/tones/panic-alert.mp3" },
-  { critical: true, label: "Officer Needs Assistance", path: "/audio/tones/officer-needs-assistance.mp3" },
-  { label: "Evacuation", path: "/audio/tones/evacuation.mp3", warning: true },
-  { label: "Severe Weather", path: "/audio/tones/severe-weather.mp3", warning: true },
-  { label: "Tow Request", path: "/audio/tones/tow-request.mp3" },
+  { id: "fire", label: "Fire Station 5/6", path: "/audio/tones/fire_tones_station_5_6.mp3", volume: 0.62 },
+  { id: "ems", label: "EMS Dispatch", path: "/audio/tones/ems_dispatch_tone.mp3", volume: 0.58 },
+  { critical: true, id: "panic", label: "Police Panic", path: "/audio/tones/police_panic_button.mp3", volume: 0.78 },
+  { critical: true, id: "signal-100", label: "Signal 100", path: "/audio/tones/signal_100.mp3", volume: 0.46 },
 ];
