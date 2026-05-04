@@ -13,9 +13,9 @@ export const cadSections: CadSection[] = [
     status: "Ready",
   },
   {
-    title: "Officer MDT",
+    title: "MDT",
     href: "/cad/officer",
-    description: "Patrol workspace for calls, lookup, status, and report flow.",
+    description: "Unit workspace for law enforcement, fire, EMS, tow, calls, lookup, status, and report flow.",
     status: "Ready",
   },
   {

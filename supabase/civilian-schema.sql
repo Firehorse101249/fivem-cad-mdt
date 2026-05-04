@@ -148,9 +148,9 @@ alter table public.civilian_images enable row level security;
 alter table public.civilian_records enable row level security;
 
 comment on table public.civilian_profiles is
-  'Civilian profiles intended to be searchable by officer MDT and dispatch lookup modules.';
+  'Civilian profiles intended to be searchable by MDT and dispatch lookup modules.';
 comment on table public.civilian_vehicles is
-  'Civilian vehicle registrations intended for officer MDT and dispatch plate lookup modules.';
+  'Civilian vehicle registrations intended for MDT and dispatch plate lookup modules.';
 comment on table public.civilian_records is
   'Read-only civilian-facing record summaries. Officer/admin systems own arrest, citation, warrant, BOLO, and history updates.';
 

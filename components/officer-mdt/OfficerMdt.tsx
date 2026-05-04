@@ -473,7 +473,7 @@ export function OfficerMdt() {
               <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-400/10 text-sm font-bold text-sky-200 ring-1 ring-sky-400/30">MD</span>
               <div className="transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-300">Sentinel CAD</p>
-                <h1 className="mt-1 text-lg font-semibold text-white">Officer MDT</h1>
+                <h1 className="mt-1 text-lg font-semibold text-white">MDT</h1>
               </div>
             </div>
             <p className="mt-2 font-mono text-xs text-neutral-500 transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">{session.callsign} / {session.agency}</p>
