@@ -3,16 +3,21 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createCivilianRmsRecord,
   dispatchBolosToMdt,
   dispatchCallsToMdt,
   dispatchUnitsToRoster,
+  loadCadLookupDetail,
   loadDispatchData,
   removeDispatchUnitByCallsign,
   searchCadRecords,
   updateDispatchCallUnits,
   updateDispatchUnitStatus,
   upsertOfficerUnit,
+  type CadLookupDetail,
   type CadLookupResult,
+  type CadLookupScope,
+  type RmsRecordType,
 } from "@/app/_lib/cad-data";
 import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
 import { toneConfig, type ToneConfig } from "@/components/dispatch/toneConfig";
@@ -23,16 +28,35 @@ import {
   officerModules,
   penalCode,
   policies,
-  arrestWorkflows,
-  citationWorkflows,
   quickStatusButtons,
   statusOptions,
-  workflowGroups,
 } from "./mockOfficerData";
-import type { ActivityLogEntry, Agency, Bolo, LookupTab, MdtCall, MdtSession, OfficerModule, UnitRosterEntry, UnitStatus } from "./types";
+import type { ActivityLogEntry, Agency, Bolo, LookupTab, MdtCall, MdtSession, OfficerModule, PenalCodeEntry, UnitRosterEntry, UnitStatus } from "./types";
 
 const sessionKey = "sentinel-officer-mdt-session";
 const toneById = Object.fromEntries(toneConfig.map((tone) => [tone.id, tone])) as Record<ToneConfig["id"], ToneConfig>;
+
+type RmsAction = "Arrest Report" | "Citation" | "Field Interview" | "Fix-it Ticket" | "Incident Report" | "Warning";
+
+type RmsSeed = {
+  action: RmsAction;
+  subject?: CadLookupDetail;
+};
+
+type RmsDraft = {
+  action: RmsAction;
+  callNumber: string;
+  charges: PenalCodeEntry[];
+  location: string;
+  narrative: string;
+  primarySubject: CadLookupDetail | null;
+  reportNumber: string;
+  status: "Draft" | "Submitted";
+  suspects: string[];
+  vehicles: string[];
+  weapons: string[];
+  witnesses: string[];
+};
 
 function nowTime() {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
@@ -82,6 +106,23 @@ function isSupervisor(session: MdtSession) {
   return session.unitType === "Supervisor" || session.unitType === "Battalion";
 }
 
+function chargeTotals(charges: PenalCodeEntry[]) {
+  return charges.reduce(
+    (totals, charge) => ({
+      fine: totals.fine + Number(charge.fine.replace(/[^0-9.]/g, "") || 0),
+      months: totals.months + Number(charge.jailTime.replace(/[^0-9.]/g, "") || 0),
+    }),
+    { fine: 0, months: 0 },
+  );
+}
+
+function rmsRecordType(action: RmsAction): RmsRecordType {
+  if (action === "Arrest Report") return "Arrest history";
+  if (action === "Citation" || action === "Fix-it Ticket") return "Citation history";
+  if (action === "Warning") return "Warning history";
+  return "Notes/history";
+}
+
 export function OfficerMdt() {
   const [session, setSession] = useState<MdtSession | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -92,6 +133,10 @@ export function OfficerMdt() {
   const [bolos, setBolos] = useState<Bolo[]>([]);
   const [roster, setRoster] = useState<UnitRosterEntry[]>([]);
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
+  const [lookupDetail, setLookupDetail] = useState<CadLookupDetail | null>(null);
+  const [lookupNotice, setLookupNotice] = useState("Search a person, plate, license, BOLO, warrant, or weapon.");
+  const [rmsSeed, setRmsSeed] = useState<RmsSeed>({ action: "Incident Report" });
+  const [rmsNotice, setRmsNotice] = useState("RMS drafts save to the selected civilian profile history.");
   const [unitRowId, setUnitRowId] = useState("");
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
@@ -460,20 +505,124 @@ export function OfficerMdt() {
     };
   }, [playEmergencyAudio, startSignal100Sequence, triggerPanicSequence]);
 
-  async function runLookup(query: string) {
-    addLog(`Lookup submitted: ${query}.`, "Lookups");
+  async function runLookup(scope: CadLookupScope, label: string, query: string) {
+    addLog(`Lookup submitted: ${label}.`, "Lookups");
+    const normalized = query.trim();
+    if (!normalized) {
+      setLookupResults([]);
+      setLookupNotice("Enter a lookup query before searching.");
+      return;
+    }
+
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       setSyncNotice("Supabase is not configured. Lookups are unavailable.");
+      setLookupNotice("Supabase is not configured. Lookups are unavailable.");
       return;
     }
     try {
-      const value = query.includes(":") ? query.split(":").slice(1).join(":").trim() : query;
-      setLookupResults(await searchCadRecords(supabase, value));
+      const results = await searchCadRecords(supabase, normalized, scope);
+      setLookupResults(results);
+      setLookupNotice(results.length ? `${results.length} matching record${results.length === 1 ? "" : "s"} found.` : "No matching Supabase records found.");
     } catch (error) {
-      setSyncNotice(error instanceof Error ? error.message : "Could not run lookup.");
+      const message = error instanceof Error ? error.message : "Could not run lookup.";
+      setLookupNotice(message);
+      setSyncNotice(message);
     }
   }
+
+  async function openLookupResult(result: CadLookupResult) {
+    if (!result.civilianId) {
+      setLookupNotice(`${result.source} result is not tied to a civilian profile yet.`);
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setLookupNotice("Supabase is not configured. Profile detail is unavailable.");
+      return;
+    }
+
+    try {
+      const detail = await loadCadLookupDetail(supabase, result.civilianId);
+      setLookupDetail(detail);
+      setLookupNotice(`Opened ${detail.civilian.first_name} ${detail.civilian.last_name}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not open profile detail.";
+      setLookupNotice(message);
+      setSyncNotice(message);
+    }
+  }
+
+  function startRmsFromLookup(action: RmsAction, subject = lookupDetail) {
+    setRmsSeed({ action, subject: subject ?? undefined });
+    setRmsNotice(subject ? `${action} started for ${subject.civilian.first_name} ${subject.civilian.last_name}.` : `${action} started.`);
+    setModule("reports");
+  }
+
+  async function saveRmsDraft(draft: RmsDraft) {
+    if (!draft.primarySubject) {
+      setRmsNotice("Select a primary subject before saving to a profile.");
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setRmsNotice("Supabase is not configured. RMS records cannot be saved.");
+      return;
+    }
+
+    const totals = chargeTotals(draft.charges);
+    const recordType = rmsRecordType(draft.action);
+    const subject = draft.primarySubject.civilian;
+    const title = `${draft.action} ${draft.reportNumber}`;
+    const description = [
+      `Subject: ${subject.first_name} ${subject.last_name}`,
+      draft.location ? `Location: ${draft.location}` : "",
+      draft.callNumber ? `Call: ${draft.callNumber}` : "",
+      draft.charges.length ? `Charges: ${draft.charges.map((charge) => `${charge.section} ${charge.charge}`).join("; ")}` : "",
+      totals.fine ? `Fine total: $${totals.fine.toLocaleString("en-US")}` : "",
+      totals.months ? `Custody total: ${totals.months} months` : "",
+      draft.narrative,
+    ].filter(Boolean).join("\n");
+
+    try {
+      await createCivilianRmsRecord(supabase, {
+        civilianId: subject.id,
+        createdBy: userId,
+        description,
+        metadata: {
+          action: draft.action,
+          callNumber: draft.callNumber,
+          charges: draft.charges,
+          fineTotal: totals.fine,
+          jailMonthsTotal: totals.months,
+          location: draft.location,
+          reportNumber: draft.reportNumber,
+          suspects: draft.suspects,
+          vehicles: draft.vehicles,
+          weapons: draft.weapons,
+          witnesses: draft.witnesses,
+        },
+        recordType,
+        title,
+      });
+      const updatedDetail = await loadCadLookupDetail(supabase, subject.id);
+      setLookupDetail(updatedDetail);
+      setRmsNotice(`${title} saved to ${subject.first_name} ${subject.last_name}'s profile.`);
+      addLog(`${title} saved to civilian profile.`, "Reports");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save RMS record.";
+      setRmsNotice(message);
+      setSyncNotice(message);
+    }
+  }
+
+  const effectiveRmsSeed = useMemo<RmsSeed>(() => {
+    if (module === "citations") return { action: "Citation", subject: lookupDetail ?? undefined };
+    if (module === "arrests") return { action: "Arrest Report", subject: lookupDetail ?? undefined };
+    return rmsSeed;
+  }, [lookupDetail, module, rmsSeed]);
 
   if (!hydrated) {
     return <div className="min-h-screen bg-neutral-950 p-6 text-neutral-300">Loading MDT terminal...</div>;
@@ -542,10 +691,32 @@ export function OfficerMdt() {
               <ActiveCalls calls={calls} onAttach={attachToCall} onDetach={detachFromCall} onSelect={setSelectedCallId} selectedCall={selectedCall} session={session} />
             ) : null}
             {module === "my-status" ? <MyStatus agency={session.agency} onStatusChange={changeStatus} status={status} /> : null}
-            {module === "lookups" ? <Lookups onSearch={runLookup} results={lookupResults} /> : null}
-            {module === "reports" ? <Reports agency={session.agency} onDraft={(name) => addLog(`${name} draft opened.`, "Reports")} /> : null}
-            {module === "citations" ? <WorkflowModule title="Citations" workflows={citationWorkflows} onDraft={addLog} /> : null}
-            {module === "arrests" ? <WorkflowModule title="Arrests" workflows={arrestWorkflows} onDraft={addLog} /> : null}
+            {module === "lookups" ? (
+              <Lookups
+                detail={lookupDetail}
+                notice={lookupNotice}
+                onSearch={runLookup}
+                onSelectResult={openLookupResult}
+                onStartRms={startRmsFromLookup}
+                results={lookupResults}
+              />
+            ) : null}
+            {module === "reports" ? (
+              <RmsWriter
+                activeCall={selectedCall}
+                key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`}
+                notice={rmsNotice}
+                onSave={saveRmsDraft}
+                seed={effectiveRmsSeed}
+                selectedLookup={lookupDetail}
+              />
+            ) : null}
+            {module === "citations" ? (
+              <RmsWriter activeCall={selectedCall} key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`} notice={rmsNotice} onSave={saveRmsDraft} seed={effectiveRmsSeed} selectedLookup={lookupDetail} />
+            ) : null}
+            {module === "arrests" ? (
+              <RmsWriter activeCall={selectedCall} key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`} notice={rmsNotice} onSave={saveRmsDraft} seed={effectiveRmsSeed} selectedLookup={lookupDetail} />
+            ) : null}
             {module === "warrants" ? <Warrants bolos={bolos} /> : null}
             {module === "bolos" ? <Bolos bolos={bolos} /> : null}
             {module === "penal-code" ? <PenalCode /> : null}
@@ -831,79 +1002,302 @@ function MyStatus({ agency, onStatusChange, status }: { agency: Agency; onStatus
   );
 }
 
-function Lookups({ onSearch, results }: { onSearch: (query: string) => void; results: CadLookupResult[] }) {
+function Lookups({
+  detail,
+  notice,
+  onSearch,
+  onSelectResult,
+  onStartRms,
+  results,
+}: {
+  detail: CadLookupDetail | null;
+  notice: string;
+  onSearch: (scope: CadLookupScope, label: string, query: string) => void;
+  onSelectResult: (result: CadLookupResult) => void;
+  onStartRms: (action: RmsAction, subject?: CadLookupDetail | null) => void;
+  results: CadLookupResult[];
+}) {
   const [tab, setTab] = useState<LookupTab>("Name");
   const [query, setQuery] = useState("");
+  const scope = tab as CadLookupScope;
+  const submit = () => onSearch(scope, `${tab}: ${query || "empty query"}`, query);
 
   return (
-    <Panel title="Lookup Tools">
-      <div className="mb-4 flex flex-wrap gap-2">
-        {lookupTabs.map((item) => (
-          <button key={item} onClick={() => setTab(item)} className={`min-h-10 rounded-md border px-3 text-sm ${tab === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400 hover:bg-white/10"}`}>
-            {item}
-          </button>
-        ))}
+    <div className="grid gap-4 2xl:grid-cols-[0.8fr_1.2fr]">
+      <Panel title="Lookup Tools">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {lookupTabs.map((item) => (
+            <button key={item} onClick={() => setTab(item)} className={`min-h-10 rounded-md border px-3 text-sm ${tab === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400 hover:bg-white/10"}`}>
+              {item}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submit();
+            }}
+            className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white"
+            placeholder={`${tab} lookup`}
+          />
+          <button onClick={submit} className="h-11 rounded-md bg-sky-400 px-5 text-sm font-bold text-neutral-950">Search</button>
+        </div>
+        <p className="mt-3 text-sm text-neutral-400">{notice}</p>
+        <div className="mt-4 grid gap-2">
+          {results.length ? (
+            results.map((result) => (
+              <button key={`${result.source}-${result.id}`} type="button" onClick={() => onSelectResult(result)} className="rounded-md border border-white/10 bg-neutral-950 p-3 text-left hover:border-sky-300/40 hover:bg-white/[0.04]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-white">{result.label}</p>
+                  <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
+                </div>
+                <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
+              </button>
+            ))
+          ) : (
+            <Notice text="No lookup results displayed." />
+          )}
+        </div>
+      </Panel>
+      <LookupDetailPanel detail={detail} onStartRms={onStartRms} />
+    </div>
+  );
+}
+
+function LookupDetailPanel({ detail, onStartRms }: { detail: CadLookupDetail | null; onStartRms: (action: RmsAction, subject?: CadLookupDetail | null) => void }) {
+  if (!detail) {
+    return (
+      <Panel title="Record Detail">
+        <Notice text="Select a lookup result tied to a civilian profile to view full RMS detail." />
+      </Panel>
+    );
+  }
+
+  const civilian = detail.civilian;
+  const name = `${civilian.first_name} ${civilian.last_name}`.trim() || "Unnamed civilian";
+
+  return (
+    <Panel title="Record Detail">
+      <div className="grid gap-4 xl:grid-cols-[180px_1fr]">
+        <div className="overflow-hidden rounded-md border border-white/10 bg-neutral-950">
+          {civilian.profile_image_url || civilian.images.profile_photo_url ? (
+            <div
+              aria-label={`${name} ID photo`}
+              className="aspect-[3/4] w-full bg-cover bg-center"
+              role="img"
+              style={{ backgroundImage: `url(${civilian.profile_image_url || civilian.images.profile_photo_url})` }}
+            />
+          ) : (
+            <div className="grid aspect-[3/4] place-items-center text-4xl font-semibold text-neutral-600">{name.slice(0, 2).toUpperCase()}</div>
+          )}
+          <div className={`border-t px-3 py-2 text-center text-sm font-bold ${detail.isWanted ? "border-rose-300/40 bg-rose-400/15 text-rose-100" : "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"}`}>
+            {detail.isWanted ? "WANTED / HIT" : "NO ACTIVE WARRANT HIT"}
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <Info label="Name" value={name} />
+            <Info label="DOB" value={civilian.date_of_birth || "Unknown"} />
+            <Info label="Address" value={civilian.address || "Unknown"} />
+            <Info label="Height / Weight" value={`${civilian.height || "Unknown"} / ${civilian.weight || "Unknown"}`} />
+            <Info label="Phone" value={civilian.phone || "Unknown"} />
+            <Info label="Occupation" value={civilian.occupation || "Unknown"} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            {(["Warning", "Fix-it Ticket", "Citation", "Arrest Report", "Incident Report"] as RmsAction[]).map((action) => (
+              <button key={action} type="button" onClick={() => onStartRms(action, detail)} className="min-h-10 rounded-md border border-sky-300/30 bg-sky-300/10 px-2 text-sm font-semibold text-sky-100 hover:bg-sky-300/20">
+                {action}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white" placeholder={`${tab} lookup`} />
-        <button onClick={() => onSearch(`${tab}: ${query || "empty query"}`)} className="h-11 rounded-md bg-sky-400 px-5 text-sm font-bold text-neutral-950">Search</button>
-      </div>
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <Info label="Result Source" value="Supabase civilian, vehicle, and BOLO tables" />
-        <Info label="FiveM Sync" value="CAD data synced through Supabase; FiveM bridge pending" />
-      </div>
-      <div className="mt-4 grid gap-2">
-        {results.length ? (
-          results.map((result) => (
-            <div key={`${result.source}-${result.id}`} className="rounded-md border border-white/10 bg-neutral-950 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-semibold text-white">{result.label}</p>
-                <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
-              </div>
-              <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
-            </div>
-          ))
-        ) : (
-          <Notice text="No Supabase lookup results for this query yet." />
-        )}
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <RecordList title="Licenses" items={civilian.licenses.map((license) => `${license.license_type}: ${license.status}${license.expires_at ? ` / expires ${license.expires_at}` : ""}`)} />
+        <RecordList title="Vehicles" items={civilian.vehicles.map((vehicle) => `${vehicle.plate || "No plate"} / ${vehicle.color} ${vehicle.make} ${vehicle.model} / registration ${vehicle.registration_status || "Unknown"} / insurance ${vehicle.insurance_status || "Unknown"}`)} />
+        <RecordList title="Flags" items={detail.flags.length ? detail.flags : ["No profile flags."]} />
+        <RecordList title="Active BOLO / Warrant Hits" items={detail.activeBolos.length ? detail.activeBolos.map((bolo) => `${bolo.label} / ${bolo.meta}`) : ["No active BOLO hits."]} />
+        <RecordList title="Profile History" items={civilian.records.length ? civilian.records.slice(0, 8).map((record) => `${record.record_type}: ${record.title} / ${record.description}`) : ["No profile history records."]} />
       </div>
     </Panel>
   );
 }
 
-function Reports({ agency, onDraft }: { agency: Agency; onDraft: (name: string) => void }) {
-  return <WorkflowModule title="Reports" workflows={workflowGroups[agency]} onDraft={(message) => onDraft(message)} />;
+function RecordList({ items, title }: { items: string[]; title: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-neutral-500">{title}</p>
+      <div className="space-y-1">
+        {items.map((item) => (
+          <p key={item} className="rounded border border-white/10 bg-neutral-900 px-2 py-1 text-sm text-neutral-300">{item}</p>
+        ))}
+      </div>
+    </div>
+  );
 }
 
-function WorkflowModule({ onDraft, title, workflows }: { onDraft: (message: string) => void; title: string; workflows: string[] }) {
-  const [selected, setSelected] = useState(workflows[0] ?? "Incident Report");
+function RmsWriter({
+  activeCall,
+  notice,
+  onSave,
+  seed,
+  selectedLookup,
+}: {
+  activeCall: MdtCall | null;
+  notice: string;
+  onSave: (draft: RmsDraft) => void;
+  seed: RmsSeed;
+  selectedLookup: CadLookupDetail | null;
+}) {
+  const [draft, setDraft] = useState<RmsDraft>(() => makeRmsDraft(seed, activeCall));
+  const [chargeQuery, setChargeQuery] = useState("");
+  const [witnessInput, setWitnessInput] = useState("");
+  const [suspectInput, setSuspectInput] = useState("");
+  const [vehicleInput, setVehicleInput] = useState("");
+  const [weaponInput, setWeaponInput] = useState("");
+  const totals = chargeTotals(draft.charges);
+  const filteredCharges = useMemo(() => {
+    const value = chargeQuery.toLowerCase();
+    return penalCode.filter((item) => `${item.section} ${item.charge} ${item.classification}`.toLowerCase().includes(value));
+  }, [chargeQuery]);
+
+  function patch(patchValue: Partial<RmsDraft>) {
+    setDraft((current) => ({ ...current, ...patchValue }));
+  }
+
+  function addListValue(key: "suspects" | "vehicles" | "weapons" | "witnesses", value: string, clear: (value: string) => void) {
+    const nextValue = value.trim();
+    if (!nextValue) return;
+    setDraft((current) => ({ ...current, [key]: [...current[key], nextValue] }));
+    clear("");
+  }
+
+  const selectedName = selectedLookup ? `${selectedLookup.civilian.first_name} ${selectedLookup.civilian.last_name}`.trim() : "";
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
-      <Panel title={title}>
-        <div className="space-y-2">
-          {workflows.map((item) => (
-            <button key={item} onClick={() => setSelected(item)} className={`block min-h-11 w-full rounded-md border px-3 text-left text-sm ${selected === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 bg-neutral-950 text-neutral-300 hover:bg-white/10"}`}>
-              {item}
-            </button>
-          ))}
+    <div className="grid gap-4 2xl:grid-cols-[1.05fr_0.95fr]">
+      <Panel title="RMS Report Writer">
+        <div className="grid gap-3 lg:grid-cols-4">
+          <SelectValue label="Form" value={draft.action} options={["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"]} onChange={(value) => patch({ action: value as RmsAction })} />
+          <TextValue label="Report Number" value={draft.reportNumber} onChange={(value) => patch({ reportNumber: value })} />
+          <TextValue label="Related Call" value={draft.callNumber} onChange={(value) => patch({ callNumber: value })} />
+          <SelectValue label="Status" value={draft.status} options={["Draft", "Submitted"]} onChange={(value) => patch({ status: value as RmsDraft["status"] })} />
         </div>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <Info label="Primary Subject" value={draft.primarySubject ? `${draft.primarySubject.civilian.first_name} ${draft.primarySubject.civilian.last_name}` : "None selected"} />
+          <Info label="DOB / Sex" value={draft.primarySubject ? `${draft.primarySubject.civilian.date_of_birth || "Unknown"} / ${draft.primarySubject.civilian.gender || "Unknown"}` : "Auto-filled from lookup"} />
+          <Info label="Height / Weight" value={draft.primarySubject ? `${draft.primarySubject.civilian.height || "Unknown"} / ${draft.primarySubject.civilian.weight || "Unknown"}` : "Auto-filled from lookup"} />
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <TextValue label="Location" value={draft.location} onChange={(value) => patch({ location: value })} />
+          <TextValue label="Subject Address" value={draft.primarySubject?.civilian.address ?? ""} readOnly />
+        </div>
+        <label className="mt-3 block">
+          <span className="text-xs font-medium text-neutral-400">Narrative / Probable Cause / Disposition</span>
+          <textarea value={draft.narrative} onChange={(event) => patch({ narrative: event.target.value })} className="mt-1 min-h-44 w-full rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-white" />
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {selectedLookup ? (
+            <>
+              <button type="button" onClick={() => patch({ primarySubject: selectedLookup })} className="min-h-10 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100">Use selected as subject</button>
+              <button type="button" onClick={() => patch({ witnesses: [...draft.witnesses, selectedName] })} className="min-h-10 rounded-md border border-white/15 px-3 text-sm text-neutral-200">Add selected witness</button>
+              <button type="button" onClick={() => patch({ suspects: [...draft.suspects, selectedName] })} className="min-h-10 rounded-md border border-white/15 px-3 text-sm text-neutral-200">Add selected suspect</button>
+            </>
+          ) : null}
+          <button type="button" onClick={() => onSave(draft)} className="min-h-10 rounded-md bg-sky-400 px-4 text-sm font-bold text-neutral-950">Save to Profile</button>
+        </div>
+        <p className="mt-3 text-sm text-neutral-400">{notice}</p>
       </Panel>
-      <Panel title={`${selected} Workflow`}>
-        <form className="grid gap-3 lg:grid-cols-2" onSubmit={(event) => { event.preventDefault(); onDraft(`${selected} draft saved locally`); }}>
-          <Field label="Related Call Number" placeholder="C-2026-0148" />
-          <Field label="Location" placeholder="Street / Postal" />
-          <Field label="Involved Person" placeholder="Name or unknown" />
-          <Field label="Involved Vehicle" placeholder="Plate / description" />
-          <label className="block lg:col-span-2">
-            <span className="text-xs font-medium text-neutral-400">Narrative / Notes</span>
-            <textarea className="mt-1 min-h-32 w-full rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-white" placeholder="Enter field notes" />
-          </label>
-          <div className="lg:col-span-2">
-            <button className="min-h-11 rounded-md bg-sky-400 px-4 text-sm font-bold text-neutral-950">Save Draft</button>
-            <p className="mt-3 text-sm text-neutral-400">Draft storage is local UI only. Awaiting Supabase/FiveM integration.</p>
+
+      <div className="space-y-4">
+        <Panel title="People / Property">
+          <ListEditor title="Witnesses" value={witnessInput} items={draft.witnesses} onValueChange={setWitnessInput} onAdd={() => addListValue("witnesses", witnessInput, setWitnessInput)} />
+          <ListEditor title="Additional Suspects" value={suspectInput} items={draft.suspects} onValueChange={setSuspectInput} onAdd={() => addListValue("suspects", suspectInput, setSuspectInput)} />
+          <ListEditor title="Vehicles" value={vehicleInput} items={draft.vehicles} onValueChange={setVehicleInput} onAdd={() => addListValue("vehicles", vehicleInput, setVehicleInput)} />
+          <ListEditor title="Weapons / Evidence" value={weaponInput} items={draft.weapons} onValueChange={setWeaponInput} onAdd={() => addListValue("weapons", weaponInput, setWeaponInput)} />
+        </Panel>
+        <Panel title="Penal Code / Totals">
+          <input value={chargeQuery} onChange={(event) => setChargeQuery(event.target.value)} className="mb-3 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" placeholder="Search charges" />
+          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+            {filteredCharges.map((charge) => (
+              <button key={charge.section} type="button" onClick={() => patch({ charges: [...draft.charges, charge] })} className="grid w-full gap-2 rounded-md border border-white/10 bg-neutral-950 p-2 text-left text-sm hover:border-sky-300/40 lg:grid-cols-[0.6fr_1.5fr_0.7fr_0.7fr]">
+                <span className="font-mono text-sky-200">{charge.section}</span>
+                <span className="text-white">{charge.charge}</span>
+                <span className="text-neutral-400">{charge.fine}</span>
+                <span className="text-neutral-400">{charge.jailTime}</span>
+              </button>
+            ))}
           </div>
-        </form>
-      </Panel>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <Info label="Fine Total" value={`$${totals.fine.toLocaleString("en-US")}`} />
+            <Info label="Custody Total" value={`${totals.months} months`} />
+          </div>
+          <div className="mt-3 space-y-1">
+            {draft.charges.map((charge, index) => (
+              <button key={`${charge.section}-${index}`} type="button" onClick={() => patch({ charges: draft.charges.filter((_, itemIndex) => itemIndex !== index) })} className="block w-full rounded border border-white/10 bg-neutral-950 px-3 py-2 text-left text-sm text-neutral-300">
+                {charge.section} / {charge.charge} / {charge.fine} / {charge.jailTime}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function makeRmsDraft(seed: RmsSeed, activeCall: MdtCall | null): RmsDraft {
+  const stamp = Date.now().toString().slice(-6);
+  return {
+    action: seed.action,
+    callNumber: activeCall?.callNumber ?? "",
+    charges: [],
+    location: activeCall?.address ?? "",
+    narrative: activeCall ? `Related call ${activeCall.callNumber}: ${activeCall.incidentType}\n\n` : "",
+    primarySubject: seed.subject ?? null,
+    reportNumber: `RMS-${new Date().getFullYear()}-${stamp}`,
+    status: "Draft",
+    suspects: [],
+    vehicles: seed.subject?.civilian.vehicles.map((vehicle) => `${vehicle.plate} ${vehicle.make} ${vehicle.model}`.trim()).filter(Boolean) ?? [],
+    weapons: [],
+    witnesses: [],
+  };
+}
+
+function TextValue({ label, onChange, readOnly = false, value }: { label: string; onChange?: (value: string) => void; readOnly?: boolean; value: string }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-neutral-400">{label}</span>
+      <input value={value} readOnly={readOnly} onChange={(event) => onChange?.(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white read-only:text-neutral-400" />
+    </label>
+  );
+}
+
+function SelectValue({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-neutral-400">{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white">
+        {options.map((option) => <option key={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function ListEditor({ items, onAdd, onValueChange, title, value }: { items: string[]; onAdd: () => void; onValueChange: (value: string) => void; title: string; value: string }) {
+  return (
+    <div className="mb-4 last:mb-0">
+      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-neutral-500">{title}</p>
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+        <input value={value} onChange={(event) => onValueChange(event.target.value)} className="h-10 rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" />
+        <button type="button" onClick={onAdd} className="h-10 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100">Add</button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {items.length ? items.map((item) => <span key={item} className="rounded border border-white/10 bg-neutral-950 px-2 py-1 text-xs text-neutral-300">{item}</span>) : <span className="text-sm text-neutral-500">None added.</span>}
+      </div>
     </div>
   );
 }
@@ -1091,15 +1485,6 @@ function Info({ label, value }: { label: string; value: string }) {
       <p className="text-xs uppercase tracking-[0.14em] text-neutral-500">{label}</p>
       <p className="mt-1 break-words text-sm text-neutral-200">{value}</p>
     </div>
-  );
-}
-
-function Field({ label, placeholder }: { label: string; placeholder: string }) {
-  return (
-    <label className="block">
-      <span className="text-xs font-medium text-neutral-400">{label}</span>
-      <input className="mt-1 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" placeholder={placeholder} />
-    </label>
   );
 }
 

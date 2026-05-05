@@ -119,6 +119,7 @@ create table if not exists public.civilian_records (
   description text,
   created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
   visibility text not null default 'officer'
 );
 
@@ -128,6 +129,7 @@ alter table if exists public.civilian_records add column if not exists title tex
 alter table if exists public.civilian_records add column if not exists description text;
 alter table if exists public.civilian_records add column if not exists created_by uuid references auth.users(id) on delete set null;
 alter table if exists public.civilian_records add column if not exists created_at timestamptz not null default now();
+alter table if exists public.civilian_records add column if not exists metadata jsonb not null default '{}'::jsonb;
 alter table if exists public.civilian_records add column if not exists visibility text not null default 'officer';
 
 create index if not exists civilian_profiles_owner_id_idx on public.civilian_profiles (owner_id);

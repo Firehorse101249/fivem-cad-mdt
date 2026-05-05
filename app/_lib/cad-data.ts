@@ -33,6 +33,7 @@ import type {
 type Row = Record<string, unknown>;
 
 export type CadLookupResult = {
+  civilianId?: string;
   id: string;
   label: string;
   meta: string;
@@ -40,6 +41,24 @@ export type CadLookupResult = {
 };
 
 export type CadLookupScope = "All" | "BOLO" | "License" | "Name" | "Plate" | "Vehicle" | "Warrant" | "Weapon";
+
+export type CadLookupDetail = {
+  activeBolos: CadLookupResult[];
+  civilian: CivilianProfile;
+  flags: string[];
+  isWanted: boolean;
+};
+
+export type RmsRecordType = "Arrest history" | "Citation history" | "Warning history" | "Warrants" | "Notes/history";
+
+export type RmsRecordPayload = {
+  civilianId: string;
+  createdBy?: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+  recordType: RmsRecordType;
+  title: string;
+};
 
 const fallbackActor = "SYSTEM";
 
@@ -742,6 +761,7 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
     for (const row of batch.rows) {
       if (batch.type === "Civilian") {
         results.push({
+          civilianId: text(row.id),
           id: text(row.id),
           label: `${text(row.first_name)} ${text(row.last_name)}`.trim() || "Unnamed civilian",
           meta: [text(row.date_of_birth), text(row.address), text(row.phone)].filter(Boolean).join(" / "),
@@ -751,6 +771,7 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
       if (batch.type === "CivilianLicense") {
         const profile = metadata({ metadata: row.civilian_profiles });
         results.push({
+          civilianId: text(row.civilian_id),
           id: text(row.id),
           label: `${text(row.license_type, "License")} - ${text(row.status, "Unknown")}`,
           meta: [`Civilian: ${`${text(profile.first_name)} ${text(profile.last_name)}`.trim() || text(row.civilian_id)}`, text(profile.date_of_birth), text(row.expires_at) ? `Expires ${text(row.expires_at)}` : ""].filter(Boolean).join(" / "),
@@ -767,6 +788,7 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
       }
       if (batch.type === "Vehicle" || batch.type === "VehicleRecord") {
         results.push({
+          civilianId: text(row.civilian_id) || undefined,
           id: text(row.id),
           label: text(row.plate) || "No plate",
           meta: [text(row.color), text(row.make), text(row.model), text(row.vin), text(row.registration_status) || text(row.status), text(row.insurance_status), text(row.notes)].filter(Boolean).join(" / "),
@@ -791,6 +813,7 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
       }
       if (batch.type === "Record") {
         results.push({
+          civilianId: text(row.civilian_id),
           id: text(row.id),
           label: text(row.title) || text(row.record_type, "Record"),
           meta: [text(row.record_type), text(row.description), text(row.created_at)].filter(Boolean).join(" / "),
@@ -801,4 +824,77 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
   }
 
   return results;
+}
+
+export async function loadCadLookupDetail(supabase: SupabaseClient, civilianId: string) {
+  const { data, error } = await supabase
+    .from("civilian_profiles")
+    .select("*, civilian_licenses(*), civilian_vehicles(*), civilian_records(*)")
+    .eq("id", civilianId)
+    .single();
+
+  if (error) throw error;
+
+  const civilian = mapCivilian(data as Row);
+  const fullName = `${civilian.first_name} ${civilian.last_name}`.trim();
+  const boloTerms = [fullName, ...civilian.vehicles.map((vehicle) => vehicle.plate)].filter(Boolean);
+  const activeBolos: CadLookupResult[] = [];
+
+  if (boloTerms.length) {
+    const filter = ilikeFilter(["title", "associated_subject", "description"], lookupTerms(boloTerms.join(" ")));
+    const rows = await lookupRows(
+      supabase
+        .from("bolos")
+        .select("id, title, type, associated_subject, last_known_location, priority, status")
+        .eq("status", "Active")
+        .or(filter),
+    );
+
+    for (const row of rows) {
+      activeBolos.push({
+        id: text(row.id),
+        label: text(row.title, "BOLO"),
+        meta: [text(row.type), text(row.priority), text(row.associated_subject), text(row.last_known_location)].filter(Boolean).join(" / "),
+        source: "BOLO",
+      });
+    }
+  }
+
+  const flags = [
+    ...civilian.records
+      .filter((record) => ["BOLO association", "Warrants", "Notes/history"].includes(record.record_type))
+      .map((record) => `${record.record_type}: ${record.title}`),
+    ...civilian.licenses
+      .filter((license) => ["Suspended", "Revoked", "Expired"].includes(license.status))
+      .map((license) => `${license.license_type} ${license.status}`),
+    ...civilian.vehicles
+      .filter((vehicle) => vehicle.registration_status !== "Valid" || vehicle.insurance_status !== "Active")
+      .map((vehicle) => `${vehicle.plate || "Vehicle"} registration ${vehicle.registration_status || "unknown"} / insurance ${vehicle.insurance_status || "unknown"}`),
+  ];
+
+  return {
+    activeBolos,
+    civilian,
+    flags,
+    isWanted: civilian.records.some((record) => record.record_type === "Warrants") || activeBolos.some((bolo) => /warrant/i.test(`${bolo.label} ${bolo.meta}`)),
+  } satisfies CadLookupDetail;
+}
+
+export async function createCivilianRmsRecord(supabase: SupabaseClient, payload: RmsRecordPayload) {
+  const { data, error } = await supabase
+    .from("civilian_records")
+    .insert({
+      civilian_id: payload.civilianId,
+      created_by: payload.createdBy || null,
+      description: payload.description,
+      metadata: payload.metadata ?? {},
+      record_type: payload.recordType,
+      title: payload.title,
+      visibility: "officer",
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return mapRecord(data as Row);
 }
