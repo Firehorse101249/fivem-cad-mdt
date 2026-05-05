@@ -242,3 +242,45 @@ begin
     );
   end if;
 end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'weapons' and policyname = 'weapons_staff_read') then
+    create policy "weapons_staff_read" on public.weapons for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'weapons' and policyname = 'weapons_dispatch_admin_all') then
+    create policy "weapons_dispatch_admin_all" on public.weapons for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'vehicle_records' and policyname = 'vehicle_records_staff_read') then
+    create policy "vehicle_records_staff_read" on public.vehicle_records for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'vehicle_records' and policyname = 'vehicle_records_dispatch_admin_all') then
+    create policy "vehicle_records_dispatch_admin_all" on public.vehicle_records for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'license_records' and policyname = 'license_records_staff_read') then
+    create policy "license_records_staff_read" on public.license_records for select to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch', 'officer')
+    );
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'license_records' and policyname = 'license_records_dispatch_admin_all') then
+    create policy "license_records_dispatch_admin_all" on public.license_records for all to authenticated using (
+      public.get_my_role() in ('admin', 'dispatch')
+    ) with check (
+      public.get_my_role() in ('admin', 'dispatch')
+    );
+  end if;
+end $$;

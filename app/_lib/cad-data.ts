@@ -36,8 +36,10 @@ export type CadLookupResult = {
   id: string;
   label: string;
   meta: string;
-  source: "BOLO" | "Civilian" | "Vehicle";
+  source: "BOLO" | "Civilian" | "License" | "Record" | "Vehicle" | "Weapon";
 };
+
+export type CadLookupScope = "All" | "BOLO" | "License" | "Name" | "Plate" | "Vehicle" | "Warrant" | "Weapon";
 
 const fallbackActor = "SYSTEM";
 
@@ -590,54 +592,212 @@ function normalizeLookupTab(value: string): LookupTab {
   return "BOLO";
 }
 
-export async function searchCadRecords(supabase: SupabaseClient, query: string) {
-  const normalized = query.trim();
+function lookupScopeFromQuery(query: string): CadLookupScope {
+  const prefix = query.split(":")[0]?.trim().toLowerCase();
+  if (prefix === "bolo") return "BOLO";
+  if (prefix === "license") return "License";
+  if (prefix === "name") return "Name";
+  if (prefix === "plate") return "Plate";
+  if (prefix === "vehicle") return "Vehicle";
+  if (prefix === "warrant") return "Warrant";
+  if (prefix === "weapon") return "Weapon";
+  return "All";
+}
+
+function lookupValueFromQuery(query: string) {
+  return query.includes(":") ? query.split(":").slice(1).join(":").trim() : query.trim();
+}
+
+function lookupTerms(query: string) {
+  return query
+    .replace(/[%,()]/g, " ")
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function ilikeFilter(columns: string[], terms: string[]) {
+  return terms.flatMap((term) => columns.map((column) => `${column}.ilike.%${term}%`)).join(",");
+}
+
+function includesScope(scope: CadLookupScope, scopes: CadLookupScope[]) {
+  return scope === "All" || scopes.includes(scope);
+}
+
+function isMissingLookupTable(error: { code?: string; message?: string }) {
+  return error.code === "PGRST205" || /could not find the table|relation .* does not exist/i.test(error.message ?? "");
+}
+
+async function lookupRows(
+  request: PromiseLike<{ data: unknown[] | null; error: { code?: string; message: string } | null }>,
+  options: { optional?: boolean } = {},
+) {
+  const { data, error } = await request;
+  if (error) {
+    if (options.optional && isMissingLookupTable(error)) return [];
+    throw error;
+  }
+  return (data ?? []) as Row[];
+}
+
+export async function searchCadRecords(supabase: SupabaseClient, query: string, scope: CadLookupScope = lookupScopeFromQuery(query)) {
+  const normalized = lookupValueFromQuery(query);
   if (!normalized) return [];
 
-  const like = `%${normalized}%`;
-  const [civilians, vehicles, bolos] = await Promise.all([
-    supabase
-      .from("civilian_profiles")
-      .select("id, first_name, last_name, date_of_birth, address")
-      .or(`first_name.ilike.${like},last_name.ilike.${like},address.ilike.${like}`),
-    supabase
-      .from("civilian_vehicles")
-      .select("id, plate, make, model, color, vin")
-      .or(`plate.ilike.${like},vin.ilike.${like},make.ilike.${like},model.ilike.${like}`),
-    supabase
+  const terms = lookupTerms(normalized);
+  if (!terms.length) return [];
+
+  const searches: Array<Promise<{ rows: Row[]; type: CadLookupResult["source"] | "CivilianLicense" | "VehicleRecord" }>> = [];
+
+  if (includesScope(scope, ["Name"])) {
+    searches.push(
+      lookupRows(
+        supabase
+          .from("civilian_profiles")
+          .select("id, first_name, last_name, date_of_birth, address, phone")
+          .or(ilikeFilter(["first_name", "last_name", "address", "phone"], terms)),
+      ).then((rows) => ({ rows, type: "Civilian" })),
+    );
+  }
+
+  if (includesScope(scope, ["License", "Name"])) {
+    searches.push(
+      lookupRows(
+        supabase
+          .from("civilian_licenses")
+          .select("id, civilian_id, license_type, status, expires_at, civilian_profiles(first_name, last_name, date_of_birth)")
+          .or(ilikeFilter(["license_type", "status"], terms)),
+      ).then((rows) => ({ rows, type: "CivilianLicense" })),
+      lookupRows(
+        supabase
+          .from("license_records")
+          .select("id, license_type, license_number, status, expires_at, notes")
+          .or(ilikeFilter(["license_type", "license_number", "status", "notes"], terms)),
+        { optional: true },
+      ).then((rows) => ({ rows, type: "License" })),
+    );
+  }
+
+  if (includesScope(scope, ["Plate", "Vehicle"])) {
+    searches.push(
+      lookupRows(
+        supabase
+          .from("civilian_vehicles")
+          .select("id, plate, make, model, color, vin, insurance_status, registration_status")
+          .or(ilikeFilter(["plate", "vin", "make", "model", "color"], terms)),
+      ).then((rows) => ({ rows, type: "Vehicle" })),
+      lookupRows(
+        supabase
+          .from("vehicle_records")
+          .select("id, plate, vin, make, model, color, status, notes")
+          .or(ilikeFilter(["plate", "vin", "make", "model", "color", "status", "notes"], terms)),
+        { optional: true },
+      ).then((rows) => ({ rows, type: "VehicleRecord" })),
+    );
+  }
+
+  if (includesScope(scope, ["Weapon"])) {
+    searches.push(
+      lookupRows(
+        supabase
+          .from("weapons")
+          .select("id, serial_number, weapon_type, status, notes")
+          .or(ilikeFilter(["serial_number", "weapon_type", "status", "notes"], terms)),
+        { optional: true },
+      ).then((rows) => ({ rows, type: "Weapon" })),
+    );
+  }
+
+  if (includesScope(scope, ["BOLO", "Vehicle", "Weapon", "Warrant"])) {
+    let boloQuery = supabase
       .from("bolos")
-      .select("id, title, type, associated_subject, last_known_location")
-      .or(`title.ilike.${like},associated_subject.ilike.${like},last_known_location.ilike.${like}`),
-  ]);
+      .select("id, title, type, associated_subject, last_known_location, priority, status")
+      .or(ilikeFilter(["title", "type", "associated_subject", "last_known_location", "description", "notes"], terms));
 
-  if (civilians.error) throw civilians.error;
-  if (vehicles.error) throw vehicles.error;
-  if (bolos.error) throw bolos.error;
+    if (scope === "BOLO") boloQuery = boloQuery.eq("status", "Active");
+    if (scope === "Vehicle") boloQuery = boloQuery.in("type", ["Vehicle", "Stolen vehicle"]);
+    if (scope === "Weapon") boloQuery = boloQuery.eq("type", "Weapon");
+    if (scope === "Warrant") boloQuery = boloQuery.eq("type", "Warrant");
 
+    searches.push(lookupRows(boloQuery).then((rows) => ({ rows, type: "BOLO" })));
+  }
+
+  if (includesScope(scope, ["Name", "Warrant", "Weapon"])) {
+    let recordQuery = supabase
+      .from("civilian_records")
+      .select("id, civilian_id, record_type, title, description, created_at")
+      .or(ilikeFilter(["record_type", "title", "description"], terms));
+
+    if (scope === "Warrant") recordQuery = recordQuery.ilike("record_type", "%warrant%");
+    if (scope === "Weapon") recordQuery = recordQuery.ilike("record_type", "%weapon%");
+
+    searches.push(lookupRows(recordQuery).then((rows) => ({ rows, type: "Record" })));
+  }
+
+  const batches = await Promise.all(searches);
   const results: CadLookupResult[] = [];
-  for (const row of (civilians.data ?? []) as Row[]) {
-    results.push({
-      id: text(row.id),
-      label: `${text(row.first_name)} ${text(row.last_name)}`.trim() || "Unnamed civilian",
-      meta: [text(row.date_of_birth), text(row.address)].filter(Boolean).join(" / "),
-      source: "Civilian",
-    });
-  }
-  for (const row of (vehicles.data ?? []) as Row[]) {
-    results.push({
-      id: text(row.id),
-      label: text(row.plate) || "No plate",
-      meta: [text(row.color), text(row.make), text(row.model), text(row.vin)].filter(Boolean).join(" / "),
-      source: "Vehicle",
-    });
-  }
-  for (const row of (bolos.data ?? []) as Row[]) {
-    results.push({
-      id: text(row.id),
-      label: text(row.title),
-      meta: [text(row.type), text(row.associated_subject), text(row.last_known_location)].filter(Boolean).join(" / "),
-      source: "BOLO",
-    });
+
+  for (const batch of batches) {
+    for (const row of batch.rows) {
+      if (batch.type === "Civilian") {
+        results.push({
+          id: text(row.id),
+          label: `${text(row.first_name)} ${text(row.last_name)}`.trim() || "Unnamed civilian",
+          meta: [text(row.date_of_birth), text(row.address), text(row.phone)].filter(Boolean).join(" / "),
+          source: "Civilian",
+        });
+      }
+      if (batch.type === "CivilianLicense") {
+        const profile = metadata({ metadata: row.civilian_profiles });
+        results.push({
+          id: text(row.id),
+          label: `${text(row.license_type, "License")} - ${text(row.status, "Unknown")}`,
+          meta: [`Civilian: ${`${text(profile.first_name)} ${text(profile.last_name)}`.trim() || text(row.civilian_id)}`, text(profile.date_of_birth), text(row.expires_at) ? `Expires ${text(row.expires_at)}` : ""].filter(Boolean).join(" / "),
+          source: "License",
+        });
+      }
+      if (batch.type === "License") {
+        results.push({
+          id: text(row.id),
+          label: text(row.license_number) || text(row.license_type, "License record"),
+          meta: [text(row.license_type), text(row.status), text(row.expires_at) ? `Expires ${text(row.expires_at)}` : "", text(row.notes)].filter(Boolean).join(" / "),
+          source: "License",
+        });
+      }
+      if (batch.type === "Vehicle" || batch.type === "VehicleRecord") {
+        results.push({
+          id: text(row.id),
+          label: text(row.plate) || "No plate",
+          meta: [text(row.color), text(row.make), text(row.model), text(row.vin), text(row.registration_status) || text(row.status), text(row.insurance_status), text(row.notes)].filter(Boolean).join(" / "),
+          source: "Vehicle",
+        });
+      }
+      if (batch.type === "Weapon") {
+        results.push({
+          id: text(row.id),
+          label: text(row.serial_number) || text(row.weapon_type, "Weapon record"),
+          meta: [text(row.weapon_type), text(row.status), text(row.notes)].filter(Boolean).join(" / "),
+          source: "Weapon",
+        });
+      }
+      if (batch.type === "BOLO") {
+        results.push({
+          id: text(row.id),
+          label: text(row.title, "BOLO"),
+          meta: [text(row.type), text(row.status), text(row.priority), text(row.associated_subject), text(row.last_known_location)].filter(Boolean).join(" / "),
+          source: "BOLO",
+        });
+      }
+      if (batch.type === "Record") {
+        results.push({
+          id: text(row.id),
+          label: text(row.title) || text(row.record_type, "Record"),
+          meta: [text(row.record_type), text(row.description), text(row.created_at)].filter(Boolean).join(" / "),
+          source: "Record",
+        });
+      }
+    }
   }
 
   return results;

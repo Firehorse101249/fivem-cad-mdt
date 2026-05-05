@@ -11,6 +11,7 @@ import {
   removeDispatchUnit,
   removeDispatchUnitFromCall,
   searchCadRecords,
+  type CadLookupScope,
   updateDispatchCallStatus,
   updateDispatchUnitIdentifier,
   updateDispatchUnitStatus,
@@ -128,6 +129,7 @@ export function DispatchWorkstation() {
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
+  const [lookupNotice, setLookupNotice] = useState("Enter a lookup query to search Supabase records.");
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const audioChannelRef = useRef<RealtimeChannel | null>(null);
   const beepContextRef = useRef<AudioContext | null>(null);
@@ -455,17 +457,29 @@ export function DispatchWorkstation() {
     }
   }
 
-  async function runLookup(label: string, query: string) {
+  async function runLookup(scope: CadLookupScope, label: string, query: string) {
     addLog(`Lookup searched: ${label}.`, label);
+    const normalized = query.trim();
+    if (!normalized) {
+      setLookupResults([]);
+      setLookupNotice("Enter a lookup query before searching.");
+      return;
+    }
+
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       setSyncNotice("Supabase is not configured. Lookups are unavailable.");
+      setLookupNotice("Supabase is not configured. Lookups are unavailable.");
       return;
     }
     try {
-      setLookupResults(await searchCadRecords(supabase, query));
+      const results = await searchCadRecords(supabase, normalized, scope);
+      setLookupResults(results);
+      setLookupNotice(results.length ? `${results.length} Supabase record${results.length === 1 ? "" : "s"} found.` : "No matching Supabase records found.");
     } catch (error) {
-      setSyncNotice(error instanceof Error ? error.message : "Could not run lookup.");
+      const message = error instanceof Error ? error.message : "Could not run lookup.";
+      setLookupNotice(message);
+      setSyncNotice(message);
     }
   }
 
@@ -653,7 +667,7 @@ export function DispatchWorkstation() {
                 search={boloSearch}
               />
             ) : null}
-            {activeModule === "lookups" ? <LookupModule onSearch={runLookup} results={lookupResults} /> : null}
+            {activeModule === "lookups" ? <LookupModule notice={lookupNotice} onSearch={runLookup} results={lookupResults} /> : null}
             {activeModule === "tone-board" ? (
               <ToneBoardModule
                 onClearSignal100={clearSignal100}
@@ -1520,21 +1534,50 @@ function BoloModule({
   );
 }
 
-function LookupModule({ onSearch, results }: { onSearch: (label: string, query: string) => void; results: CadLookupResult[] }) {
-  const tabs = ["Name lookup", "License lookup", "Plate lookup", "Vehicle lookup", "Weapon lookup", "Warrant lookup", "BOLO lookup"];
+function LookupModule({
+  notice,
+  onSearch,
+  results,
+}: {
+  notice: string;
+  onSearch: (scope: CadLookupScope, label: string, query: string) => void;
+  results: CadLookupResult[];
+}) {
+  const tabs: Array<{ label: string; placeholder: string; scope: CadLookupScope }> = [
+    { label: "Name lookup", placeholder: "Search name, address, or phone", scope: "Name" },
+    { label: "License lookup", placeholder: "Search license type, number, or status", scope: "License" },
+    { label: "Plate lookup", placeholder: "Search plate or VIN", scope: "Plate" },
+    { label: "Vehicle lookup", placeholder: "Search make, model, plate, VIN, or color", scope: "Vehicle" },
+    { label: "Weapon lookup", placeholder: "Search serial, type, status, or notes", scope: "Weapon" },
+    { label: "Warrant lookup", placeholder: "Search warrant title, subject, or record text", scope: "Warrant" },
+    { label: "BOLO lookup", placeholder: "Search BOLO title, subject, or location", scope: "BOLO" },
+  ];
   const [tab, setTab] = useState(tabs[0]);
   const [query, setQuery] = useState("");
+  function submitLookup() {
+    onSearch(tab.scope, `${tab.label}: ${query || "empty query"}`, query);
+  }
+
   return (
     <Panel title="Lookup Terminal">
       <div className="mb-4 flex flex-wrap gap-2">
         {tabs.map((item) => (
-          <button key={item} onClick={() => setTab(item)} className={`rounded-md border px-3 py-2 text-xs ${tab === item ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>{item}</button>
+          <button key={item.scope} type="button" onClick={() => setTab(item)} className={`rounded-md border px-3 py-2 text-xs ${tab.scope === item.scope ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>{item.label}</button>
         ))}
       </div>
       <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white" placeholder={`Search ${tab.toLowerCase()}`} />
-        <button onClick={() => onSearch(`${tab}: ${query || "empty query"}`, query)} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submitLookup();
+          }}
+          className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white"
+          placeholder={tab.placeholder}
+        />
+        <button type="button" onClick={submitLookup} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
       </div>
+      <p className="mt-3 text-sm text-neutral-400">{notice}</p>
       <div className="mt-4 space-y-2">
         {results.length ? (
           results.map((result) => (
@@ -1547,7 +1590,7 @@ function LookupModule({ onSearch, results }: { onSearch: (label: string, query: 
             </div>
           ))
         ) : (
-          <UnderConstruction text={`${tab} - No Supabase results for this query yet.`} />
+          <div className="rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-400">No lookup results displayed.</div>
         )}
       </div>
     </Panel>
