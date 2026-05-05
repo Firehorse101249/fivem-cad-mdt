@@ -703,7 +703,7 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
       lookupRows(
         supabase
           .from("civilian_vehicles")
-          .select("id, plate, make, model, color, vin, insurance_status, registration_status")
+          .select("id, civilian_id, plate, make, model, color, vin, insurance_status, registration_status")
           .or(ilikeFilter(["plate", "vin", "make", "model", "color"], terms)),
       ).then((rows) => ({ rows, type: "Vehicle" })),
       lookupRows(

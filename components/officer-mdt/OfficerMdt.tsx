@@ -1176,74 +1176,106 @@ function RmsWriter({
   }
 
   const selectedName = selectedLookup ? `${selectedLookup.civilian.first_name} ${selectedLookup.civilian.last_name}`.trim() : "";
+  const subject = draft.primarySubject?.civilian;
 
   return (
-    <div className="grid gap-4 2xl:grid-cols-[1.05fr_0.95fr]">
-      <Panel title="RMS Report Writer">
-        <div className="grid gap-3 lg:grid-cols-4">
-          <SelectValue label="Form" value={draft.action} options={["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"]} onChange={(value) => patch({ action: value as RmsAction })} />
-          <TextValue label="Report Number" value={draft.reportNumber} onChange={(value) => patch({ reportNumber: value })} />
-          <TextValue label="Related Call" value={draft.callNumber} onChange={(value) => patch({ callNumber: value })} />
-          <SelectValue label="Status" value={draft.status} options={["Draft", "Submitted"]} onChange={(value) => patch({ status: value as RmsDraft["status"] })} />
+    <div className="rounded-md bg-neutral-800/60 p-3 text-neutral-950">
+      <div className="mx-auto max-w-[1040px] bg-[#fbfaf1] p-4 shadow-2xl ring-1 ring-black/20 md:p-6 print:shadow-none">
+        <div className="grid gap-3 border-2 border-neutral-950 p-3 md:grid-cols-[1fr_260px]">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-neutral-700">Sentinel State Department of Public Safety</p>
+            <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.08em] text-neutral-950">{draft.action}</h2>
+            <p className="mt-1 text-xs uppercase tracking-[0.16em] text-neutral-700">RMS / Court Record Worksheet</p>
+          </div>
+          <div className="grid grid-cols-2 border border-neutral-950 text-xs">
+            <PaperBox label="Report No." value={draft.reportNumber} />
+            <PaperBox label="Status" value={draft.status} />
+            <PaperBox label="Call No." value={draft.callNumber || "N/A"} />
+            <PaperBox label="Date" value={new Date().toLocaleDateString("en-US")} />
+          </div>
         </div>
 
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <Info label="Primary Subject" value={draft.primarySubject ? `${draft.primarySubject.civilian.first_name} ${draft.primarySubject.civilian.last_name}` : "None selected"} />
-          <Info label="DOB / Sex" value={draft.primarySubject ? `${draft.primarySubject.civilian.date_of_birth || "Unknown"} / ${draft.primarySubject.civilian.gender || "Unknown"}` : "Auto-filled from lookup"} />
-          <Info label="Height / Weight" value={draft.primarySubject ? `${draft.primarySubject.civilian.height || "Unknown"} / ${draft.primarySubject.civilian.weight || "Unknown"}` : "Auto-filled from lookup"} />
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <PaperSelect label="Form Type" value={draft.action} options={["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"]} onChange={(value) => patch({ action: value as RmsAction })} />
+          <PaperInput label="Report Number" value={draft.reportNumber} onChange={(value) => patch({ reportNumber: value })} />
+          <PaperInput label="Related Call" value={draft.callNumber} onChange={(value) => patch({ callNumber: value })} />
+          <PaperSelect label="Report Status" value={draft.status} options={["Draft", "Submitted"]} onChange={(value) => patch({ status: value as RmsDraft["status"] })} />
         </div>
+
+        <PaperSection title="Subject / Defendant Information">
+          <div className="grid gap-px bg-neutral-950 md:grid-cols-4">
+            <PaperBox label="Full Name" value={subject ? `${subject.first_name} ${subject.last_name}` : "No subject selected"} />
+            <PaperBox label="Date of Birth" value={subject?.date_of_birth || "Auto fill"} />
+            <PaperBox label="Sex / Gender" value={subject?.gender || "Auto fill"} />
+            <PaperBox label="Phone" value={subject?.phone || "Auto fill"} />
+            <PaperBox label="Height" value={subject?.height || "Auto fill"} />
+            <PaperBox label="Weight" value={subject?.weight || "Auto fill"} />
+            <PaperBox label="Occupation" value={subject?.occupation || "Auto fill"} />
+            <PaperBox label="Civilian ID" value={subject?.id || "Auto fill"} />
+            <PaperBox className="md:col-span-4" label="Residence Address" value={subject?.address || "Auto fill from lookup"} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {selectedLookup ? (
+              <>
+                <button type="button" onClick={() => patch({ primarySubject: selectedLookup })} className="min-h-9 border border-neutral-950 bg-neutral-950 px-3 text-xs font-black uppercase tracking-[0.14em] text-white">Use selected as subject</button>
+                <button type="button" onClick={() => patch({ witnesses: [...draft.witnesses, selectedName] })} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected witness</button>
+                <button type="button" onClick={() => patch({ suspects: [...draft.suspects, selectedName] })} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected suspect</button>
+              </>
+            ) : null}
+          </div>
+        </PaperSection>
+
+        <PaperSection title="Incident / Violation Details">
+          <div className="grid gap-3 md:grid-cols-2">
+            <PaperInput label="Location of Occurrence" value={draft.location} onChange={(value) => patch({ location: value })} />
+            <PaperInput label="Unit / Officer" value="Auto-filled from MDT session" readOnly />
+          </div>
+          <label className="mt-3 block">
+            <span className="block border border-b-0 border-neutral-950 bg-neutral-200 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]">Narrative / Probable Cause / Disposition</span>
+            <textarea value={draft.narrative} onChange={(event) => patch({ narrative: event.target.value })} className="min-h-56 w-full resize-y border border-neutral-950 bg-[#fffdf5] px-3 py-2 font-mono text-sm leading-6 text-neutral-950 outline-none" />
+          </label>
+        </PaperSection>
+
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <TextValue label="Location" value={draft.location} onChange={(value) => patch({ location: value })} />
-          <TextValue label="Subject Address" value={draft.primarySubject?.civilian.address ?? ""} readOnly />
-        </div>
-        <label className="mt-3 block">
-          <span className="text-xs font-medium text-neutral-400">Narrative / Probable Cause / Disposition</span>
-          <textarea value={draft.narrative} onChange={(event) => patch({ narrative: event.target.value })} className="mt-1 min-h-44 w-full rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-white" />
-        </label>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {selectedLookup ? (
-            <>
-              <button type="button" onClick={() => patch({ primarySubject: selectedLookup })} className="min-h-10 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100">Use selected as subject</button>
-              <button type="button" onClick={() => patch({ witnesses: [...draft.witnesses, selectedName] })} className="min-h-10 rounded-md border border-white/15 px-3 text-sm text-neutral-200">Add selected witness</button>
-              <button type="button" onClick={() => patch({ suspects: [...draft.suspects, selectedName] })} className="min-h-10 rounded-md border border-white/15 px-3 text-sm text-neutral-200">Add selected suspect</button>
-            </>
-          ) : null}
-          <button type="button" onClick={() => onSave(draft)} className="min-h-10 rounded-md bg-sky-400 px-4 text-sm font-bold text-neutral-950">Save to Profile</button>
-        </div>
-        <p className="mt-3 text-sm text-neutral-400">{notice}</p>
-      </Panel>
+          <PaperSection title="Parties / Property">
+            <PaperListEditor title="Witnesses" value={witnessInput} items={draft.witnesses} onValueChange={setWitnessInput} onAdd={() => addListValue("witnesses", witnessInput, setWitnessInput)} />
+            <PaperListEditor title="Additional Suspects" value={suspectInput} items={draft.suspects} onValueChange={setSuspectInput} onAdd={() => addListValue("suspects", suspectInput, setSuspectInput)} />
+            <PaperListEditor title="Vehicles" value={vehicleInput} items={draft.vehicles} onValueChange={setVehicleInput} onAdd={() => addListValue("vehicles", vehicleInput, setVehicleInput)} />
+            <PaperListEditor title="Weapons / Evidence" value={weaponInput} items={draft.weapons} onValueChange={setWeaponInput} onAdd={() => addListValue("weapons", weaponInput, setWeaponInput)} />
+          </PaperSection>
 
-      <div className="space-y-4">
-        <Panel title="People / Property">
-          <ListEditor title="Witnesses" value={witnessInput} items={draft.witnesses} onValueChange={setWitnessInput} onAdd={() => addListValue("witnesses", witnessInput, setWitnessInput)} />
-          <ListEditor title="Additional Suspects" value={suspectInput} items={draft.suspects} onValueChange={setSuspectInput} onAdd={() => addListValue("suspects", suspectInput, setSuspectInput)} />
-          <ListEditor title="Vehicles" value={vehicleInput} items={draft.vehicles} onValueChange={setVehicleInput} onAdd={() => addListValue("vehicles", vehicleInput, setVehicleInput)} />
-          <ListEditor title="Weapons / Evidence" value={weaponInput} items={draft.weapons} onValueChange={setWeaponInput} onAdd={() => addListValue("weapons", weaponInput, setWeaponInput)} />
-        </Panel>
-        <Panel title="Penal Code / Totals">
-          <input value={chargeQuery} onChange={(event) => setChargeQuery(event.target.value)} className="mb-3 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" placeholder="Search charges" />
-          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-            {filteredCharges.map((charge) => (
-              <button key={charge.section} type="button" onClick={() => patch({ charges: [...draft.charges, charge] })} className="grid w-full gap-2 rounded-md border border-white/10 bg-neutral-950 p-2 text-left text-sm hover:border-sky-300/40 lg:grid-cols-[0.6fr_1.5fr_0.7fr_0.7fr]">
-                <span className="font-mono text-sky-200">{charge.section}</span>
-                <span className="text-white">{charge.charge}</span>
-                <span className="text-neutral-400">{charge.fine}</span>
-                <span className="text-neutral-400">{charge.jailTime}</span>
-              </button>
-            ))}
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <Info label="Fine Total" value={`$${totals.fine.toLocaleString("en-US")}`} />
-            <Info label="Custody Total" value={`${totals.months} months`} />
-          </div>
-          <div className="mt-3 space-y-1">
-            {draft.charges.map((charge, index) => (
-              <button key={`${charge.section}-${index}`} type="button" onClick={() => patch({ charges: draft.charges.filter((_, itemIndex) => itemIndex !== index) })} className="block w-full rounded border border-white/10 bg-neutral-950 px-3 py-2 text-left text-sm text-neutral-300">
-                {charge.section} / {charge.charge} / {charge.fine} / {charge.jailTime}
-              </button>
-            ))}
-          </div>
-        </Panel>
+          <PaperSection title="Charges / Penalty Calculation">
+            <input value={chargeQuery} onChange={(event) => setChargeQuery(event.target.value)} className="mb-3 h-9 w-full border border-neutral-950 bg-[#fffdf5] px-2 text-sm outline-none" placeholder="Search penal code entries" />
+            <div className="max-h-52 overflow-y-auto border border-neutral-950">
+              {filteredCharges.map((charge) => (
+                <button key={charge.section} type="button" onClick={() => patch({ charges: [...draft.charges, charge] })} className="grid w-full gap-px border-b border-neutral-950 bg-neutral-950 text-left text-xs last:border-b-0 md:grid-cols-[0.6fr_1.5fr_0.7fr_0.7fr]">
+                  <span className="bg-[#fffdf5] px-2 py-1 font-mono font-bold">{charge.section}</span>
+                  <span className="bg-[#fffdf5] px-2 py-1">{charge.charge}</span>
+                  <span className="bg-[#fffdf5] px-2 py-1">{charge.fine}</span>
+                  <span className="bg-[#fffdf5] px-2 py-1">{charge.jailTime}</span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-px bg-neutral-950">
+              <PaperBox label="Fine Total" value={`$${totals.fine.toLocaleString("en-US")}`} />
+              <PaperBox label="Custody Total" value={`${totals.months} months`} />
+            </div>
+            <div className="mt-3 space-y-1">
+              {draft.charges.map((charge, index) => (
+                <button key={`${charge.section}-${index}`} type="button" onClick={() => patch({ charges: draft.charges.filter((_, itemIndex) => itemIndex !== index) })} className="block w-full border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-left text-xs">
+                  {charge.section} / {charge.charge} / {charge.fine} / {charge.jailTime}
+                </button>
+              ))}
+            </div>
+          </PaperSection>
+        </div>
+
+        <div className="mt-3 grid gap-3 border-2 border-neutral-950 p-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <PaperInput label="Officer Signature" value="" readOnly />
+          <PaperInput label="Supervisor / Court Clerk" value="" readOnly />
+          <button type="button" onClick={() => onSave(draft)} className="min-h-11 border-2 border-neutral-950 bg-neutral-950 px-5 text-sm font-black uppercase tracking-[0.16em] text-white">Save to Profile</button>
+        </div>
+        <p className="mt-3 text-xs text-neutral-700">{notice}</p>
       </div>
     </div>
   );
@@ -1267,36 +1299,54 @@ function makeRmsDraft(seed: RmsSeed, activeCall: MdtCall | null): RmsDraft {
   };
 }
 
-function TextValue({ label, onChange, readOnly = false, value }: { label: string; onChange?: (value: string) => void; readOnly?: boolean; value: string }) {
+function PaperSection({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <section className="mt-3 border-2 border-neutral-950">
+      <h3 className="border-b-2 border-neutral-950 bg-neutral-950 px-2 py-1 text-xs font-black uppercase tracking-[0.18em] text-white">{title}</h3>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
+function PaperBox({ className = "", label, value }: { className?: string; label: string; value: string }) {
+  return (
+    <div className={`min-h-14 bg-[#fffdf5] px-2 py-1 ${className}`}>
+      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-600">{label}</p>
+      <p className="mt-1 break-words font-mono text-sm text-neutral-950">{value || "N/A"}</p>
+    </div>
+  );
+}
+
+function PaperInput({ label, onChange, readOnly = false, value }: { label: string; onChange?: (value: string) => void; readOnly?: boolean; value: string }) {
   return (
     <label className="block">
-      <span className="text-xs font-medium text-neutral-400">{label}</span>
-      <input value={value} readOnly={readOnly} onChange={(event) => onChange?.(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white read-only:text-neutral-400" />
+      <span className="block border border-b-0 border-neutral-950 bg-neutral-200 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]">{label}</span>
+      <input value={value} readOnly={readOnly} onChange={(event) => onChange?.(event.target.value)} className="h-10 w-full border border-neutral-950 bg-[#fffdf5] px-2 font-mono text-sm text-neutral-950 outline-none read-only:text-neutral-600" />
     </label>
   );
 }
 
-function SelectValue({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
+function PaperSelect({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
   return (
     <label className="block">
-      <span className="text-xs font-medium text-neutral-400">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white">
+      <span className="block border border-b-0 border-neutral-950 bg-neutral-200 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]">{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full border border-neutral-950 bg-[#fffdf5] px-2 font-mono text-sm text-neutral-950 outline-none">
         {options.map((option) => <option key={option}>{option}</option>)}
       </select>
     </label>
   );
 }
 
-function ListEditor({ items, onAdd, onValueChange, title, value }: { items: string[]; onAdd: () => void; onValueChange: (value: string) => void; title: string; value: string }) {
+function PaperListEditor({ items, onAdd, onValueChange, title, value }: { items: string[]; onAdd: () => void; onValueChange: (value: string) => void; title: string; value: string }) {
   return (
     <div className="mb-4 last:mb-0">
-      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-neutral-500">{title}</p>
+      <p className="mb-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-700">{title}</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-        <input value={value} onChange={(event) => onValueChange(event.target.value)} className="h-10 rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" />
-        <button type="button" onClick={onAdd} className="h-10 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100">Add</button>
+        <input value={value} onChange={(event) => onValueChange(event.target.value)} className="h-9 border border-neutral-950 bg-[#fffdf5] px-2 text-sm outline-none" />
+        <button type="button" onClick={onAdd} className="h-9 border border-neutral-950 px-3 text-xs font-black uppercase">Add</button>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {items.length ? items.map((item) => <span key={item} className="rounded border border-white/10 bg-neutral-950 px-2 py-1 text-xs text-neutral-300">{item}</span>) : <span className="text-sm text-neutral-500">None added.</span>}
+      <div className="mt-2 space-y-1">
+        {items.length ? items.map((item) => <p key={item} className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs">{item}</p>) : <p className="text-xs text-neutral-600">None listed.</p>}
       </div>
     </div>
   );

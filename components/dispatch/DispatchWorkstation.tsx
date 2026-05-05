@@ -7,10 +7,12 @@ import {
   assignDispatchUnitToCall,
   createBolo,
   createDispatchCall,
+  loadCadLookupDetail,
   loadDispatchData,
   removeDispatchUnit,
   removeDispatchUnitFromCall,
   searchCadRecords,
+  type CadLookupDetail,
   type CadLookupScope,
   updateDispatchCallStatus,
   updateDispatchUnitIdentifier,
@@ -129,6 +131,7 @@ export function DispatchWorkstation() {
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
   const [lookupResults, setLookupResults] = useState<CadLookupResult[]>([]);
+  const [lookupDetail, setLookupDetail] = useState<CadLookupDetail | null>(null);
   const [lookupNotice, setLookupNotice] = useState("Enter a lookup query to search Supabase records.");
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const audioChannelRef = useRef<RealtimeChannel | null>(null);
@@ -483,6 +486,29 @@ export function DispatchWorkstation() {
     }
   }
 
+  async function openLookupResult(result: CadLookupResult) {
+    if (!result.civilianId) {
+      setLookupNotice(`${result.source} result is not tied to a civilian profile yet.`);
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setLookupNotice("Supabase is not configured. Profile detail is unavailable.");
+      return;
+    }
+
+    try {
+      const detail = await loadCadLookupDetail(supabase, result.civilianId);
+      setLookupDetail(detail);
+      setLookupNotice(`Opened ${detail.civilian.first_name} ${detail.civilian.last_name}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not open profile detail.";
+      setLookupNotice(message);
+      setSyncNotice(message);
+    }
+  }
+
   const stopTones = useCallback(() => {
     audioRefs.current.forEach((audio) => {
       audio.pause();
@@ -667,7 +693,7 @@ export function DispatchWorkstation() {
                 search={boloSearch}
               />
             ) : null}
-            {activeModule === "lookups" ? <LookupModule notice={lookupNotice} onSearch={runLookup} results={lookupResults} /> : null}
+            {activeModule === "lookups" ? <LookupModule detail={lookupDetail} notice={lookupNotice} onSearch={runLookup} onSelectResult={openLookupResult} results={lookupResults} /> : null}
             {activeModule === "tone-board" ? (
               <ToneBoardModule
                 onClearSignal100={clearSignal100}
@@ -1535,12 +1561,16 @@ function BoloModule({
 }
 
 function LookupModule({
+  detail,
   notice,
   onSearch,
+  onSelectResult,
   results,
 }: {
+  detail: CadLookupDetail | null;
   notice: string;
   onSearch: (scope: CadLookupScope, label: string, query: string) => void;
+  onSelectResult: (result: CadLookupResult) => void;
   results: CadLookupResult[];
 }) {
   const tabs: Array<{ label: string; placeholder: string; scope: CadLookupScope }> = [
@@ -1559,41 +1589,94 @@ function LookupModule({
   }
 
   return (
-    <Panel title="Lookup Terminal">
-      <div className="mb-4 flex flex-wrap gap-2">
-        {tabs.map((item) => (
-          <button key={item.scope} type="button" onClick={() => setTab(item)} className={`rounded-md border px-3 py-2 text-xs ${tab.scope === item.scope ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>{item.label}</button>
-        ))}
+    <div className="grid gap-4 2xl:grid-cols-[0.8fr_1.2fr]">
+      <Panel title="Lookup Terminal">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {tabs.map((item) => (
+            <button key={item.scope} type="button" onClick={() => setTab(item)} className={`rounded-md border px-3 py-2 text-xs ${tab.scope === item.scope ? "border-sky-300/40 bg-sky-300/10 text-sky-100" : "border-white/10 text-neutral-400"}`}>{item.label}</button>
+          ))}
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitLookup();
+            }}
+            className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white"
+            placeholder={tab.placeholder}
+          />
+          <button type="button" onClick={submitLookup} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
+        </div>
+        <p className="mt-3 text-sm text-neutral-400">{notice}</p>
+        <div className="mt-4 space-y-2">
+          {results.length ? (
+            results.map((result) => (
+              <button key={`${result.source}-${result.id}`} type="button" onClick={() => onSelectResult(result)} className="block w-full rounded-md border border-white/10 bg-neutral-950 p-3 text-left hover:border-sky-300/40 hover:bg-white/[0.04]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-white">{result.label}</p>
+                  <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
+                </div>
+                <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-400">No lookup results displayed.</div>
+          )}
+        </div>
+      </Panel>
+      <DispatchLookupDetail detail={detail} />
+    </div>
+  );
+}
+
+function DispatchLookupDetail({ detail }: { detail: CadLookupDetail | null }) {
+  if (!detail) {
+    return <Panel title="Profile Detail"><UnderConstruction text="Select a lookup result tied to a civilian profile to open full record detail." /></Panel>;
+  }
+
+  const civilian = detail.civilian;
+  const name = `${civilian.first_name} ${civilian.last_name}`.trim() || "Unnamed civilian";
+  return (
+    <Panel title="Profile Detail">
+      <div className="grid gap-4 xl:grid-cols-[170px_1fr]">
+        <div className="overflow-hidden rounded-md border border-white/10 bg-neutral-950">
+          {civilian.profile_image_url || civilian.images.profile_photo_url ? (
+            <div aria-label={`${name} ID photo`} className="aspect-[3/4] bg-cover bg-center" role="img" style={{ backgroundImage: `url(${civilian.profile_image_url || civilian.images.profile_photo_url})` }} />
+          ) : (
+            <div className="grid aspect-[3/4] place-items-center text-4xl font-semibold text-neutral-600">{name.slice(0, 2).toUpperCase()}</div>
+          )}
+          <div className={`border-t px-3 py-2 text-center text-sm font-bold ${detail.isWanted ? "border-rose-300/40 bg-rose-400/15 text-rose-100" : "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"}`}>
+            {detail.isWanted ? "WANTED / HIT" : "NO ACTIVE WARRANT HIT"}
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <Info label="Name" value={name} />
+          <Info label="DOB" value={civilian.date_of_birth || "Unknown"} />
+          <Info label="Address" value={civilian.address || "Unknown"} />
+          <Info label="Height / Weight" value={`${civilian.height || "Unknown"} / ${civilian.weight || "Unknown"}`} />
+          <Info label="Phone" value={civilian.phone || "Unknown"} />
+          <Info label="Occupation" value={civilian.occupation || "Unknown"} />
+        </div>
       </div>
-      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") submitLookup();
-          }}
-          className="h-11 rounded-md border border-white/10 bg-neutral-950 px-3 text-white"
-          placeholder={tab.placeholder}
-        />
-        <button type="button" onClick={submitLookup} className="h-11 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950">Search</button>
-      </div>
-      <p className="mt-3 text-sm text-neutral-400">{notice}</p>
-      <div className="mt-4 space-y-2">
-        {results.length ? (
-          results.map((result) => (
-            <div key={`${result.source}-${result.id}`} className="rounded-md border border-white/10 bg-neutral-950 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-semibold text-white">{result.label}</p>
-                <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-1 text-xs text-sky-100">{result.source}</span>
-              </div>
-              <p className="mt-2 text-sm text-neutral-400">{result.meta || "No additional details"}</p>
-            </div>
-          ))
-        ) : (
-          <div className="rounded-md border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-400">No lookup results displayed.</div>
-        )}
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <DispatchRecordList title="Licenses" items={civilian.licenses.map((license) => `${license.license_type}: ${license.status}${license.expires_at ? ` / expires ${license.expires_at}` : ""}`)} />
+        <DispatchRecordList title="Vehicles" items={civilian.vehicles.map((vehicle) => `${vehicle.plate || "No plate"} / ${vehicle.color} ${vehicle.make} ${vehicle.model} / registration ${vehicle.registration_status || "Unknown"} / insurance ${vehicle.insurance_status || "Unknown"}`)} />
+        <DispatchRecordList title="Flags" items={detail.flags.length ? detail.flags : ["No profile flags."]} />
+        <DispatchRecordList title="Active BOLO / Warrant Hits" items={detail.activeBolos.length ? detail.activeBolos.map((bolo) => `${bolo.label} / ${bolo.meta}`) : ["No active BOLO hits."]} />
       </div>
     </Panel>
+  );
+}
+
+function DispatchRecordList({ items, title }: { items: string[]; title: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-neutral-500">{title}</p>
+      <div className="space-y-1">
+        {items.map((item) => <p key={item} className="rounded border border-white/10 bg-neutral-900 px-2 py-1 text-sm text-neutral-300">{item}</p>)}
+      </div>
+    </div>
   );
 }
 

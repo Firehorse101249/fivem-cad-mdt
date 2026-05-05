@@ -28,8 +28,6 @@ export const officerModules: Array<{
   { agencies: agencyOptions, id: "my-status", label: "My Status", priority: "primary" },
   { agencies: agencyOptions, id: "lookups", label: "Lookups", priority: "primary" },
   { agencies: agencyOptions, id: "reports", label: "Reports", priority: "primary" },
-  { agencies: ["Law Enforcement"], id: "citations", label: "Citations" },
-  { agencies: ["Law Enforcement"], id: "arrests", label: "Arrests" },
   { agencies: ["Law Enforcement"], id: "warrants", label: "Warrants" },
   { agencies: ["Law Enforcement"], id: "bolos", label: "BOLOs" },
   { agencies: ["Law Enforcement"], id: "penal-code", label: "Penal Code" },
