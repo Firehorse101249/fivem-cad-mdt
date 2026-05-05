@@ -9,6 +9,7 @@ import {
   dispatchUnitsToRoster,
   loadCadLookupDetail,
   loadDispatchData,
+  loadRmsReportByNumber,
   removeDispatchUnitByCallsign,
   searchCadRecords,
   updateDispatchCallUnits,
@@ -18,6 +19,7 @@ import {
   type CadLookupResult,
   type CadLookupScope,
   type RmsRecordType,
+  type RmsReportReview,
 } from "@/app/_lib/cad-data";
 import { getSupabaseBrowserClient } from "@/app/_lib/supabase-client";
 import { toneConfig, type ToneConfig } from "@/components/dispatch/toneConfig";
@@ -137,6 +139,7 @@ export function OfficerMdt() {
   const [lookupNotice, setLookupNotice] = useState("Search a person, plate, license, BOLO, warrant, or weapon.");
   const [rmsSeed, setRmsSeed] = useState<RmsSeed>({ action: "Incident Report" });
   const [rmsNotice, setRmsNotice] = useState("RMS drafts save to the selected civilian profile history.");
+  const [reviewedReport, setReviewedReport] = useState<RmsReportReview | null>(null);
   const [unitRowId, setUnitRowId] = useState("");
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
@@ -618,6 +621,25 @@ export function OfficerMdt() {
     }
   }
 
+  async function reviewRmsReport(reportNumber: string) {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setRmsNotice("Supabase is not configured. Reports cannot be reviewed.");
+      return;
+    }
+
+    try {
+      const report = await loadRmsReportByNumber(supabase, reportNumber);
+      setReviewedReport(report);
+      setRmsNotice(`Opened ${report.title}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not open report.";
+      setReviewedReport(null);
+      setRmsNotice(message);
+      setSyncNotice(message);
+    }
+  }
+
   const effectiveRmsSeed = useMemo<RmsSeed>(() => {
     if (module === "citations") return { action: "Citation", subject: lookupDetail ?? undefined };
     if (module === "arrests") return { action: "Arrest Report", subject: lookupDetail ?? undefined };
@@ -702,20 +724,20 @@ export function OfficerMdt() {
               />
             ) : null}
             {module === "reports" ? (
-              <RmsWriter
+              <ReportsWorkspace
                 activeCall={selectedCall}
-                key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`}
+                lookupNotice={lookupNotice}
+                lookupResults={lookupResults}
                 notice={rmsNotice}
+                onReview={reviewRmsReport}
                 onSave={saveRmsDraft}
+                onSearchLookup={runLookup}
+                onSelectLookup={openLookupResult}
                 seed={effectiveRmsSeed}
                 selectedLookup={lookupDetail}
+                reviewedReport={reviewedReport}
+                onSeedChange={setRmsSeed}
               />
-            ) : null}
-            {module === "citations" ? (
-              <RmsWriter activeCall={selectedCall} key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`} notice={rmsNotice} onSave={saveRmsDraft} seed={effectiveRmsSeed} selectedLookup={lookupDetail} />
-            ) : null}
-            {module === "arrests" ? (
-              <RmsWriter activeCall={selectedCall} key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}-${selectedCall?.id ?? "no-call"}`} notice={rmsNotice} onSave={saveRmsDraft} seed={effectiveRmsSeed} selectedLookup={lookupDetail} />
             ) : null}
             {module === "warrants" ? <Warrants bolos={bolos} /> : null}
             {module === "bolos" ? <Bolos bolos={bolos} /> : null}
@@ -1139,16 +1161,171 @@ function RecordList({ items, title }: { items: string[]; title: string }) {
   );
 }
 
-function RmsWriter({
+function ReportsWorkspace({
   activeCall,
+  lookupNotice,
+  lookupResults,
   notice,
+  onReview,
   onSave,
+  onSearchLookup,
+  onSelectLookup,
+  onSeedChange,
+  reviewedReport,
   seed,
   selectedLookup,
 }: {
   activeCall: MdtCall | null;
+  lookupNotice: string;
+  lookupResults: CadLookupResult[];
+  notice: string;
+  onReview: (reportNumber: string) => void;
+  onSave: (draft: RmsDraft) => void;
+  onSearchLookup: (scope: CadLookupScope, label: string, query: string) => void;
+  onSelectLookup: (result: CadLookupResult) => void;
+  onSeedChange: (seed: RmsSeed) => void;
+  reviewedReport: RmsReportReview | null;
+  seed: RmsSeed;
+  selectedLookup: CadLookupDetail | null;
+}) {
+  const [mode, setMode] = useState<"create" | "menu" | "review">("menu");
+  const [reportNumber, setReportNumber] = useState("");
+  const reportTypes: RmsAction[] = ["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"];
+
+  if (mode === "review") {
+    return (
+      <div className="grid gap-4 2xl:grid-cols-[360px_1fr]">
+        <Panel title="Review Incident Report">
+          <label className="block">
+            <span className="text-xs font-medium text-neutral-400">Report Number</span>
+            <input value={reportNumber} onChange={(event) => setReportNumber(event.target.value)} className="mt-1 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-white" placeholder="RMS-2026-123456" />
+          </label>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => onReview(reportNumber)} className="min-h-10 rounded-md bg-sky-400 px-4 text-sm font-bold text-neutral-950">Open Report</button>
+            <button type="button" onClick={() => setMode("menu")} className="min-h-10 rounded-md border border-white/15 px-4 text-sm text-neutral-200">Back</button>
+          </div>
+          <p className="mt-3 text-sm text-neutral-400">{notice}</p>
+        </Panel>
+        <ReportReviewPanel report={reviewedReport} />
+      </div>
+    );
+  }
+
+  if (mode === "create") {
+    return (
+      <RmsWriter
+        activeCall={activeCall}
+        key={`${seed.action}-${seed.subject?.civilian.id ?? "none"}-${activeCall?.id ?? "no-call"}`}
+        lookupNotice={lookupNotice}
+        lookupResults={lookupResults}
+        notice={notice}
+        onSave={onSave}
+        onSearchLookup={onSearchLookup}
+        onSelectLookup={onSelectLookup}
+        seed={seed}
+        selectedLookup={selectedLookup}
+      />
+    );
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Panel title="Reports">
+        <div className="grid gap-3">
+          <button type="button" onClick={() => setMode("review")} className="rounded-md border border-white/10 bg-neutral-950 p-4 text-left hover:border-sky-300/40">
+            <p className="text-lg font-semibold text-white">Review incident report</p>
+            <p className="mt-2 text-sm text-neutral-400">Enter a report number and pull the saved RMS record from profile history.</p>
+          </button>
+          <div className="rounded-md border border-white/10 bg-neutral-950 p-4">
+            <p className="text-lg font-semibold text-white">Create a report</p>
+            <p className="mt-2 text-sm text-neutral-400">Choose the form type first, then complete the paper-style RMS form.</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {reportTypes.map((action) => (
+                <button
+                  key={action}
+                  type="button"
+                  onClick={() => {
+                    onSeedChange({ action, subject: selectedLookup ?? undefined });
+                    setMode("create");
+                  }}
+                  className="min-h-11 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-semibold text-sky-100 hover:bg-sky-300/20"
+                >
+                  {action}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Selected Lookup">
+        {selectedLookup ? <MiniProfileSummary detail={selectedLookup} /> : <Notice text="Use Lookups first, or attach a subject from inside Create a report." />}
+      </Panel>
+    </div>
+  );
+}
+
+function ReportReviewPanel({ report }: { report: RmsReportReview | null }) {
+  if (!report) return <Panel title="Report"><Notice text="No report loaded." /></Panel>;
+  const meta = report.metadata;
+  const charges = Array.isArray(meta.charges) ? meta.charges as PenalCodeEntry[] : [];
+  return (
+    <div className="rounded-md bg-neutral-800/60 p-3 text-neutral-950">
+      <div className="mx-auto max-w-[900px] bg-[#fbfaf1] p-5 shadow-2xl ring-1 ring-black/20">
+        <div className="border-2 border-neutral-950 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-neutral-700">Sentinel State Department of Public Safety</p>
+          <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.08em] text-neutral-950">{report.title}</h2>
+          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-neutral-700">{report.recordType} / {report.createdAt}</p>
+        </div>
+        <PaperSection title="Subject">
+          <PaperBox label="Civilian" value={report.civilianLabel} />
+        </PaperSection>
+        <PaperSection title="Narrative / Record">
+          <pre className="whitespace-pre-wrap border border-neutral-950 bg-[#fffdf5] p-3 font-mono text-sm leading-6 text-neutral-950">{report.description}</pre>
+        </PaperSection>
+        <PaperSection title="Charges / Totals">
+          <div className="grid grid-cols-2 gap-px bg-neutral-950">
+            <PaperBox label="Fine Total" value={`$${Number(meta.fineTotal ?? 0).toLocaleString("en-US")}`} />
+            <PaperBox label="Custody Total" value={`${Number(meta.jailMonthsTotal ?? 0)} months`} />
+          </div>
+          <div className="mt-3 space-y-1">
+            {charges.length ? charges.map((charge) => <p key={`${charge.section}-${charge.charge}`} className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs">{charge.section} / {charge.charge} / {charge.fine} / {charge.jailTime}</p>) : <p className="text-sm text-neutral-700">No charges listed.</p>}
+          </div>
+        </PaperSection>
+      </div>
+    </div>
+  );
+}
+
+function MiniProfileSummary({ detail }: { detail: CadLookupDetail }) {
+  const civilian = detail.civilian;
+  return (
+    <div className="grid gap-2">
+      <Info label="Name" value={`${civilian.first_name} ${civilian.last_name}`.trim() || "Unnamed civilian"} />
+      <Info label="DOB" value={civilian.date_of_birth || "Unknown"} />
+      <Info label="Address" value={civilian.address || "Unknown"} />
+      <Info label="Flags" value={detail.flags.join(", ") || "None"} />
+    </div>
+  );
+}
+
+function RmsWriter({
+  activeCall,
+  lookupNotice,
+  lookupResults,
+  notice,
+  onSave,
+  onSearchLookup,
+  onSelectLookup,
+  seed,
+  selectedLookup,
+}: {
+  activeCall: MdtCall | null;
+  lookupNotice: string;
+  lookupResults: CadLookupResult[];
   notice: string;
   onSave: (draft: RmsDraft) => void;
+  onSearchLookup: (scope: CadLookupScope, label: string, query: string) => void;
+  onSelectLookup: (result: CadLookupResult) => void;
   seed: RmsSeed;
   selectedLookup: CadLookupDetail | null;
 }) {
@@ -1158,6 +1335,8 @@ function RmsWriter({
   const [suspectInput, setSuspectInput] = useState("");
   const [vehicleInput, setVehicleInput] = useState("");
   const [weaponInput, setWeaponInput] = useState("");
+  const [attachQuery, setAttachQuery] = useState("");
+  const [attachScope, setAttachScope] = useState<CadLookupScope>("Name");
   const totals = chargeTotals(draft.charges);
   const filteredCharges = useMemo(() => {
     const value = chargeQuery.toLowerCase();
@@ -1196,11 +1375,27 @@ function RmsWriter({
         </div>
 
         <div className="mt-3 grid gap-3 md:grid-cols-4">
-          <PaperSelect label="Form Type" value={draft.action} options={["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"]} onChange={(value) => patch({ action: value as RmsAction })} />
           <PaperInput label="Report Number" value={draft.reportNumber} onChange={(value) => patch({ reportNumber: value })} />
           <PaperInput label="Related Call" value={draft.callNumber} onChange={(value) => patch({ callNumber: value })} />
           <PaperSelect label="Report Status" value={draft.status} options={["Draft", "Submitted"]} onChange={(value) => patch({ status: value as RmsDraft["status"] })} />
         </div>
+
+        <PaperSection title="Lookup / Attach Person or Property">
+          <div className="grid gap-2 md:grid-cols-[180px_1fr_auto]">
+            <PaperSelect label="Lookup Type" value={attachScope} options={["Name", "License", "Plate", "Vehicle", "Weapon", "Warrant", "BOLO"]} onChange={(value) => setAttachScope(value as CadLookupScope)} />
+            <PaperInput label="Lookup Query" value={attachQuery} onChange={setAttachQuery} />
+            <button type="button" onClick={() => onSearchLookup(attachScope, `${attachScope}: ${attachQuery || "empty query"}`, attachQuery)} className="min-h-10 self-end border-2 border-neutral-950 bg-neutral-950 px-4 text-xs font-black uppercase tracking-[0.14em] text-white">Search</button>
+          </div>
+          <p className="mt-2 text-xs text-neutral-700">{lookupNotice}</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {lookupResults.slice(0, 6).map((result) => (
+              <button key={`${result.source}-${result.id}`} type="button" onClick={() => onSelectLookup(result)} className="border border-neutral-950 bg-[#fffdf5] p-2 text-left text-xs hover:bg-neutral-100">
+                <span className="font-black uppercase">{result.source}</span> / <span className="font-semibold">{result.label}</span>
+                <span className="mt-1 block text-neutral-700">{result.meta || "No additional details"}</span>
+              </button>
+            ))}
+          </div>
+        </PaperSection>
 
         <PaperSection title="Subject / Defendant Information">
           <div className="grid gap-px bg-neutral-950 md:grid-cols-4">

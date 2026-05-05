@@ -60,6 +60,16 @@ export type RmsRecordPayload = {
   title: string;
 };
 
+export type RmsReportReview = {
+  civilianLabel: string;
+  createdAt: string;
+  description: string;
+  id: string;
+  metadata: Record<string, unknown>;
+  recordType: string;
+  title: string;
+};
+
 const fallbackActor = "SYSTEM";
 
 function text(value: unknown, fallback = "") {
@@ -660,6 +670,12 @@ async function lookupRows(
   return (data ?? []) as Row[];
 }
 
+async function optionalRows(request: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>) {
+  const { data, error } = await request;
+  if (error) return [];
+  return (data ?? []) as Row[];
+}
+
 export async function searchCadRecords(supabase: SupabaseClient, query: string, scope: CadLookupScope = lookupScopeFromQuery(query)) {
   const normalized = lookupValueFromQuery(query);
   if (!normalized) return [];
@@ -829,20 +845,32 @@ export async function searchCadRecords(supabase: SupabaseClient, query: string, 
 export async function loadCadLookupDetail(supabase: SupabaseClient, civilianId: string) {
   const { data, error } = await supabase
     .from("civilian_profiles")
-    .select("*, civilian_licenses(*), civilian_vehicles(*), civilian_records(*)")
+    .select("*")
     .eq("id", civilianId)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
+  if (!data) throw new Error("No civilian profile found for that lookup result.");
 
-  const civilian = mapCivilian(data as Row);
+  const [licenses, vehicles, records] = await Promise.all([
+    optionalRows(supabase.from("civilian_licenses").select("*").eq("civilian_id", civilianId)),
+    optionalRows(supabase.from("civilian_vehicles").select("*").eq("civilian_id", civilianId)),
+    optionalRows(supabase.from("civilian_records").select("*").eq("civilian_id", civilianId).order("created_at", { ascending: false })),
+  ]);
+
+  const civilian = mapCivilian({
+    ...(data as Row),
+    civilian_licenses: licenses,
+    civilian_records: records,
+    civilian_vehicles: vehicles,
+  });
   const fullName = `${civilian.first_name} ${civilian.last_name}`.trim();
   const boloTerms = [fullName, ...civilian.vehicles.map((vehicle) => vehicle.plate)].filter(Boolean);
   const activeBolos: CadLookupResult[] = [];
 
   if (boloTerms.length) {
     const filter = ilikeFilter(["title", "associated_subject", "description"], lookupTerms(boloTerms.join(" ")));
-    const rows = await lookupRows(
+    const rows = await optionalRows(
       supabase
         .from("bolos")
         .select("id, title, type, associated_subject, last_known_location, priority, status")
@@ -881,20 +909,77 @@ export async function loadCadLookupDetail(supabase: SupabaseClient, civilianId: 
 }
 
 export async function createCivilianRmsRecord(supabase: SupabaseClient, payload: RmsRecordPayload) {
-  const { data, error } = await supabase
+  const record = {
+    civilian_id: payload.civilianId,
+    created_by: payload.createdBy || null,
+    description: payload.description,
+    metadata: payload.metadata ?? {},
+    record_type: payload.recordType,
+    title: payload.title,
+    visibility: "officer",
+  };
+  let { data, error } = await supabase
     .from("civilian_records")
-    .insert({
-      civilian_id: payload.civilianId,
-      created_by: payload.createdBy || null,
-      description: payload.description,
-      metadata: payload.metadata ?? {},
-      record_type: payload.recordType,
-      title: payload.title,
-      visibility: "officer",
-    })
+    .insert(record)
     .select()
     .single();
 
+  if (error && /metadata/i.test(error.message)) {
+    const legacyRecord = {
+      civilian_id: record.civilian_id,
+      created_by: record.created_by,
+      description: record.description,
+      record_type: record.record_type,
+      title: record.title,
+      visibility: record.visibility,
+    };
+    const retry = await supabase.from("civilian_records").insert(legacyRecord).select().single();
+    data = retry.data;
+    error = retry.error;
+  }
+
   if (error) throw error;
   return mapRecord(data as Row);
+}
+
+export async function loadRmsReportByNumber(supabase: SupabaseClient, reportNumber: string) {
+  const normalized = reportNumber.trim();
+  if (!normalized) throw new Error("Enter a report number.");
+
+  const reportResult = await supabase
+    .from("civilian_records")
+    .select("id, civilian_id, record_type, title, description, created_at, metadata, civilian_profiles(first_name, last_name, date_of_birth)")
+    .or(`title.ilike.%${normalized}%,description.ilike.%${normalized}%`)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let data: unknown = reportResult.data;
+  let error = reportResult.error;
+
+  if (error && /metadata/i.test(error.message)) {
+    const retry = await supabase
+      .from("civilian_records")
+      .select("id, civilian_id, record_type, title, description, created_at, civilian_profiles(first_name, last_name, date_of_birth)")
+      .or(`title.ilike.%${normalized}%,description.ilike.%${normalized}%`)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) throw error;
+  if (!data) throw new Error("No report found for that report number.");
+
+  const row = data as Row;
+  const profile = metadata({ metadata: row.civilian_profiles });
+  return {
+    civilianLabel: [`${text(profile.first_name)} ${text(profile.last_name)}`.trim(), text(profile.date_of_birth)].filter(Boolean).join(" / ") || text(row.civilian_id),
+    createdAt: text(row.created_at),
+    description: text(row.description),
+    id: text(row.id),
+    metadata: metadata(row),
+    recordType: text(row.record_type),
+    title: text(row.title),
+  } satisfies RmsReportReview;
 }
