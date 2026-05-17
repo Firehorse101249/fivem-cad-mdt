@@ -19,6 +19,12 @@ export const cadSections: CadSection[] = [
     status: "Ready",
   },
   {
+    title: "FTO MDT",
+    href: "/cad/fto",
+    description: "Field training workspace for trainee selection, checklist progress, notes, and daily observations.",
+    status: "Ready",
+  },
+  {
     title: "Civilians",
     href: "/cad/civilians",
     description: "Civilian profiles, identifiers, licenses, and RP character records.",

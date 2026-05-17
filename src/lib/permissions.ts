@@ -9,13 +9,18 @@ export const ALL_PERMISSIONS = [
   "questions:manage",
   "roles:manage",
   "certifications:manage",
+  "departments:manage",
   "users:manage",
   "audit:view",
   "system:manage",
+  "fto:manage",
   "cad:access",
   "cad:dispatch",
   "cad:officer",
   "cad:civilian",
+  "cad:fto",
+  "reports:write",
+  "reports:review",
 ] as const;
 
 export type PermissionKey = (typeof ALL_PERMISSIONS)[number] | (string & {});

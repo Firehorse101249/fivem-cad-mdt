@@ -6,30 +6,42 @@ type Permission = { category: string; key: string; label: string };
 type AccessItem = Record<string, unknown> & {
   access_certification_permissions?: Array<{ permission_key: string }>;
   access_role_permissions?: Array<{ permission_key: string }>;
+  certification_kind?: string | null;
+  department_key?: string | null;
   description?: string;
   id: string;
   is_founder?: boolean;
   key: string;
   name: string;
   priority?: number;
+  rank_order?: number | null;
+  role_kind?: string | null;
 };
 
 type Draft = {
   description: string;
+  department_key: string;
   id: string;
   key: string;
   name: string;
   permission_keys: string[];
   priority: number;
+  rank_order: number;
+  role_kind: string;
+  certification_kind: string;
 };
 
 const blankDraft: Draft = {
   description: "",
+  department_key: "",
   id: "",
   key: "",
   name: "",
   permission_keys: [],
   priority: 0,
+  rank_order: 0,
+  role_kind: "general",
+  certification_kind: "certification",
 };
 
 export function AccessManager({ mode }: { mode: "roles" | "certifications" }) {
@@ -65,11 +77,15 @@ export function AccessManager({ mode }: { mode: "roles" | "certifications" }) {
       mode === "roles" ? item.access_role_permissions ?? [] : item.access_certification_permissions ?? [];
     setDraft({
       description: item.description ?? "",
+      department_key: item.department_key ?? "",
       id: item.id,
       key: item.key,
       name: item.name,
       permission_keys: itemPermissions.map((permission) => permission.permission_key),
       priority: item.priority ?? 0,
+      rank_order: item.rank_order ?? 0,
+      role_kind: item.role_kind ?? "general",
+      certification_kind: item.certification_kind ?? "certification",
     });
   }
 
@@ -110,6 +126,7 @@ export function AccessManager({ mode }: { mode: "roles" | "certifications" }) {
             <button className="block w-full rounded-md border border-white/10 bg-neutral-950 px-3 py-3 text-left hover:bg-white/[0.04]" key={item.id} onClick={() => edit(item)} type="button">
               <span className="font-medium text-white">{item.name}</span>
               <span className="mt-1 block text-sm text-neutral-400">{item.description ?? item.key}</span>
+              <span className="mt-1 block text-xs text-neutral-500">{[item.department_key ?? "system", item.role_kind ?? item.certification_kind].filter(Boolean).join(" / ")}</span>
             </button>
           ))}
         </div>
@@ -119,8 +136,17 @@ export function AccessManager({ mode }: { mode: "roles" | "certifications" }) {
         <form className="mt-5 space-y-4" onSubmit={save}>
           <Text label="Name" onChange={(value) => setDraft({ ...draft, name: value })} value={draft.name} />
           <Text label="Key" onChange={(value) => setDraft({ ...draft, key: value })} value={draft.key} />
+          <Text label="Department key" onChange={(value) => setDraft({ ...draft, department_key: value })} value={draft.department_key} />
           <Text label="Description" onChange={(value) => setDraft({ ...draft, description: value })} value={draft.description} />
-          {mode === "roles" ? <Text label="Priority" onChange={(value) => setDraft({ ...draft, priority: Number(value) || 0 })} value={String(draft.priority)} /> : null}
+          {mode === "roles" ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <Text label="Priority" onChange={(value) => setDraft({ ...draft, priority: Number(value) || 0 })} value={String(draft.priority)} />
+              <Text label="Rank order" onChange={(value) => setDraft({ ...draft, rank_order: Number(value) || 0 })} value={String(draft.rank_order)} />
+              <Select label="Role kind" onChange={(value) => setDraft({ ...draft, role_kind: value })} options={["general", "rank", "system"]} value={draft.role_kind} />
+            </div>
+          ) : (
+            <Select label="Certification kind" onChange={(value) => setDraft({ ...draft, certification_kind: value })} options={["certification", "subdivision", "perk", "tier"]} value={draft.certification_kind} />
+          )}
           <div>
             <p className="text-sm font-medium text-neutral-300">Permissions</p>
             <div className="mt-2 grid gap-2 md:grid-cols-2">
@@ -152,6 +178,17 @@ function Text({ label, onChange, value }: { label: string; onChange: (value: str
     <label className="block">
       <span className="text-sm font-medium text-neutral-300">{label}</span>
       <input className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-white" onChange={(event) => onChange(event.target.value)} value={value} />
+    </label>
+  );
+}
+
+function Select({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
+  return (
+    <label className="block">
+      <span className="text-sm font-medium text-neutral-300">{label}</span>
+      <select className="mt-2 h-11 w-full rounded-md border border-white/10 bg-neutral-950 px-3 text-white" onChange={(event) => onChange(event.target.value)} value={value}>
+        {options.map((option) => <option key={option}>{option}</option>)}
+      </select>
     </label>
   );
 }

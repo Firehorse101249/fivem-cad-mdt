@@ -27,6 +27,7 @@ export const AUDIT_LOG_TYPES = [
   "membership_interview_saved",
   "membership_interview_accepted",
   "membership_interview_denied",
+  "membership_bypassed",
   "membership_question_created",
   "membership_question_updated",
   "access_role_created",
@@ -34,6 +35,7 @@ export const AUDIT_LOG_TYPES = [
   "access_certification_created",
   "access_certification_updated",
   "user_access_updated",
+  "fto_assignment_created",
 ] as const;
 
 export type AuditLogType = (typeof AUDIT_LOG_TYPES)[number] | (string & {});

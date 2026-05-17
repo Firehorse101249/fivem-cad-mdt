@@ -16,9 +16,21 @@ export function AuditAdmin() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
+  const [cursor, setCursor] = useState("0");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [cache, setCache] = useState<Record<string, { logs: Log[]; nextCursor: string | null }>>({});
 
-  async function load() {
-    const params = new URLSearchParams({ limit: "200" });
+  async function load(nextPageCursor = "0", force = false) {
+    const cacheKey = `${search.trim()}::${nextPageCursor}`;
+    if (!force && cache[cacheKey]) {
+      setLogs(cache[cacheKey].logs);
+      setNextCursor(cache[cacheKey].nextCursor);
+      setCursor(nextPageCursor);
+      setError("");
+      return;
+    }
+
+    const params = new URLSearchParams({ cursor: nextPageCursor, limit: "50" });
     if (search) params.set("search", search);
     const response = await fetch(`/api/admin/audit-logs?${params.toString()}`);
     const result = await response.json();
@@ -26,7 +38,12 @@ export function AuditAdmin() {
       setError(result.error ?? "Unable to load audit logs.");
       return;
     }
-    setLogs(result.auditLogs ?? []);
+    const nextLogs = result.auditLogs ?? [];
+    const next = result.page?.nextCursor ?? null;
+    setLogs(nextLogs);
+    setNextCursor(next);
+    setCursor(nextPageCursor);
+    setCache((current) => ({ ...current, [cacheKey]: { logs: nextLogs, nextCursor: next } }));
     setError("");
   }
 
@@ -40,7 +57,8 @@ export function AuditAdmin() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void load();
+    setCache({});
+    void load("0", true);
   }
 
   return (
@@ -56,7 +74,7 @@ export function AuditAdmin() {
         </form>
       </div>
       {error ? <p className="mt-4 rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
-      <div className="mt-5 overflow-hidden rounded-md border border-white/10">
+      <div className="mt-5 max-h-[620px] overflow-y-auto rounded-md border border-white/10">
         {logs.map((log) => (
           <article className="grid gap-3 border-t border-white/10 bg-neutral-950 px-4 py-3 first:border-t-0 lg:grid-cols-[0.8fr_0.7fr_1.3fr_0.8fr]" key={log.id}>
             <span className="text-xs text-neutral-400">{new Date(log.created_at).toLocaleString()}</span>
@@ -65,6 +83,25 @@ export function AuditAdmin() {
             <span className="text-sm text-neutral-400">{log.actor_email ?? "System"}</span>
           </article>
         ))}
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <button
+          className="rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-neutral-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={cursor === "0"}
+          onClick={() => void load(String(Math.max(0, Number(cursor) - 50)))}
+          type="button"
+        >
+          Previous
+        </button>
+        <p className="text-xs text-neutral-500">Showing page starting at {Number(cursor) + 1}</p>
+        <button
+          className="rounded-md bg-sky-400 px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!nextCursor}
+          onClick={() => nextCursor && void load(nextCursor)}
+          type="button"
+        >
+          Next
+        </button>
       </div>
     </section>
   );

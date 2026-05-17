@@ -38,8 +38,10 @@ export async function GET(request: Request) {
   const eventType = searchParams.get("eventType")?.trim() ?? "";
   const entityType = searchParams.get("entityType")?.trim() ?? "";
   const search = (searchParams.get("search")?.trim() ?? "").replace(/[%,()]/g, " ");
-  const rawLimit = Number(searchParams.get("limit") ?? 100);
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 250) : 100;
+  const rawLimit = Number(searchParams.get("limit") ?? 50);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 50;
+  const rawCursor = Number(searchParams.get("cursor") ?? 0);
+  const offset = Number.isFinite(rawCursor) ? Math.max(0, rawCursor) : 0;
 
   if (userId && !uuidPattern.test(userId)) {
     return errorResponse("User filter must be a valid user id.", 400);
@@ -51,7 +53,7 @@ export async function GET(request: Request) {
       .from("audit_logs")
       .select("id,created_at,event_type,entity_type,entity_id,actor_id,actor_email,target_user_id,target_civilian_id,summary,severity,source,ip_address,metadata")
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit);
 
     if (eventType) {
       query = query.eq("event_type", eventType);
@@ -78,17 +80,24 @@ export async function GET(request: Request) {
       );
     }
 
+    const rows = data ?? [];
+    const auditLogs = rows.slice(0, limit);
     const eventTypes = Array.from(
-      new Set([...(data ?? []).map((row) => row.event_type), ...AUDIT_LOG_TYPES]),
+      new Set([...auditLogs.map((row) => row.event_type), ...AUDIT_LOG_TYPES]),
     ).sort();
-    const entityTypes = Array.from(new Set((data ?? []).map((row) => row.entity_type))).sort();
+    const entityTypes = Array.from(new Set(auditLogs.map((row) => row.entity_type))).sort();
 
     return NextResponse.json({
       success: true,
-      auditLogs: data ?? [],
+      auditLogs,
       filters: {
         entityTypes,
         eventTypes,
+      },
+      page: {
+        cursor: String(offset),
+        limit,
+        nextCursor: rows.length > limit ? String(offset + limit) : null,
       },
     });
   } catch (error) {

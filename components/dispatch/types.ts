@@ -8,7 +8,6 @@ export type DispatchModule =
   | "lookups"
   | "map"
   | "settings"
-  | "tone-board"
   | "tow"
   | "units";
 

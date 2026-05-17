@@ -57,7 +57,18 @@ export default function LoginPage() {
       }
     }
 
-    router.push("/membership");
+    let destination = "/membership";
+    try {
+      const landingResponse = await fetch("/api/auth/landing");
+      const landing = (await landingResponse.json()) as { destination?: string; success?: boolean };
+      if (landingResponse.ok && landing.success && landing.destination) {
+        destination = landing.destination;
+      }
+    } catch {
+      destination = "/membership";
+    }
+
+    router.push(destination);
     router.refresh();
   }
 

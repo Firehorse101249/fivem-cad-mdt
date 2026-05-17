@@ -47,7 +47,6 @@ const modules: Array<{ id: DispatchModule; label: string }> = [
   { id: "tow", label: "Tow" },
   { id: "bolos", label: "BOLOs" },
   { id: "lookups", label: "Lookups" },
-  { id: "tone-board", label: "Tone Board" },
   { id: "map", label: "Map Placeholder" },
   { id: "activity-log", label: "Activity Log" },
   { id: "settings", label: "Settings" },
@@ -124,6 +123,7 @@ export function DispatchWorkstation() {
   const [boloSearch, setBoloSearch] = useState("");
   const [boloFilter, setBoloFilter] = useState("All");
   const [playingTone, setPlayingTone] = useState("");
+  const [toneOpen, setToneOpen] = useState(false);
   const [toneError, setToneError] = useState("");
   const [volume, setVolume] = useState(0.85);
   const [signal100Active, setSignal100Active] = useState(false);
@@ -648,7 +648,22 @@ export function DispatchWorkstation() {
       <div className="grid min-h-screen lg:grid-cols-[64px_1fr]">
         <ModuleRail activeModule={activeModule} onModuleChange={setActiveModule} session={session} />
         <div className="min-w-0">
-          <TerminalBar calls={calls} onEndSession={endSession} session={session} syncNotice={syncNotice} units={units} />
+          <TerminalBar calls={calls} onEndSession={endSession} onOpenTones={() => setToneOpen((current) => !current)} session={session} syncNotice={syncNotice} units={units} />
+          {toneOpen ? (
+            <div className="fixed right-4 top-24 z-50 w-[min(560px,calc(100vw-32px))] shadow-2xl shadow-black/50">
+              <ToneBoardModule
+                compact
+                onClearSignal100={clearSignal100}
+                onPlayTone={(tone) => void playTone(tone)}
+                onStop={stopTones}
+                playingTone={playingTone}
+                signal100Active={signal100Active}
+                toneError={toneError}
+                volume={volume}
+                onVolumeChange={setVolume}
+              />
+            </div>
+          ) : null}
           <main className="h-[calc(100vh-76px)] overflow-y-auto p-4">
             {activeModule === "command-center" ? (
               <CommandCenter
@@ -660,6 +675,7 @@ export function DispatchWorkstation() {
                 onRemoveUnit={removeUnitFromCall}
                 onStatusChange={updateCallStatus}
                 onUnitStatusChange={changeUnitStatus}
+                onOpenTones={() => setToneOpen(true)}
                 selectedCall={selectedCall}
                 units={units}
               />
@@ -694,18 +710,6 @@ export function DispatchWorkstation() {
               />
             ) : null}
             {activeModule === "lookups" ? <LookupModule detail={lookupDetail} notice={lookupNotice} onSearch={runLookup} onSelectResult={openLookupResult} results={lookupResults} /> : null}
-            {activeModule === "tone-board" ? (
-              <ToneBoardModule
-                onClearSignal100={clearSignal100}
-                onPlayTone={(tone) => void playTone(tone)}
-                onStop={stopTones}
-                playingTone={playingTone}
-                signal100Active={signal100Active}
-                toneError={toneError}
-                volume={volume}
-                onVolumeChange={setVolume}
-              />
-            ) : null}
             {activeModule === "map" ? <MapModule /> : null}
             {activeModule === "activity-log" ? <ActivityLogModule log={log} /> : null}
             {activeModule === "settings" ? <SettingsModule /> : null}
@@ -768,12 +772,14 @@ function Signal100Banner() {
 function TerminalBar({
   calls,
   onEndSession,
+  onOpenTones,
   session,
   syncNotice,
   units,
 }: {
   calls: DispatchCall[];
   onEndSession: () => void;
+  onOpenTones: () => void;
   session: DispatchSession;
   syncNotice: string;
   units: DispatchUnit[];
@@ -793,6 +799,7 @@ function TerminalBar({
           <Pill>{units.filter((unit) => unit.status === "Available").length} Available Units</Pill>
           <Pill critical={panicCount > 0}>{panicCount} Emergency Flags</Pill>
           <Pill>{syncNotice}</Pill>
+          <button onClick={onOpenTones} className="rounded-md bg-sky-400 px-3 py-1 font-semibold text-neutral-950 hover:bg-sky-300">Tones</button>
           <button onClick={onEndSession} className="rounded-md border border-white/15 px-3 py-1 text-neutral-300 hover:bg-white/10">End Shift</button>
         </div>
       </div>
@@ -894,6 +901,7 @@ function CommandCenter({
   onRemoveUnit,
   onStatusChange,
   onUnitStatusChange,
+  onOpenTones,
   selectedCall,
   units,
 }: {
@@ -905,6 +913,7 @@ function CommandCenter({
   onRemoveUnit: (callId: string, unitId: string) => void;
   onStatusChange: (id: string, status: CallStatus) => void;
   onUnitStatusChange: (id: string, status: DispatchUnit["status"]) => void;
+  onOpenTones: () => void;
   selectedCall: DispatchCall | null;
   units: DispatchUnit[];
 }) {
@@ -962,7 +971,7 @@ function CommandCenter({
       <Panel title="Quick Actions" className="xl:col-span-2">
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <QuickAction label="Open Call Creation" onClick={() => onModuleChange("call-creation")} />
-          <QuickAction label="Open Tone Board" onClick={() => onModuleChange("tone-board")} />
+          <QuickAction label="Tones" onClick={onOpenTones} />
           <QuickAction label="View Map" onClick={() => onModuleChange("map")} />
           <QuickAction label="Run Lookup" onClick={() => onModuleChange("lookups")} />
         </div>
@@ -1681,6 +1690,7 @@ function DispatchRecordList({ items, title }: { items: string[]; title: string }
 }
 
 function ToneBoardModule({
+  compact = false,
   onClearSignal100,
   onPlayTone,
   onStop,
@@ -1690,6 +1700,7 @@ function ToneBoardModule({
   toneError,
   volume,
 }: {
+  compact?: boolean;
   onClearSignal100: () => void;
   onPlayTone: (tone: ToneConfig) => void;
   onStop: () => void;
@@ -1703,7 +1714,7 @@ function ToneBoardModule({
     <Panel title="Tone Board">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm text-neutral-400">Station tones, EMS tone, panic alert, and Signal 100 audio.</p>
+          <p className="text-sm text-neutral-400">{compact ? "Select and control active tones." : "Station tones, EMS tone, panic alert, and Signal 100 audio."}</p>
           {playingTone ? <p className="mt-1 text-sm font-semibold text-sky-200">Playing: {playingTone}</p> : null}
           {signal100Active ? <p className="mt-1 text-sm font-semibold text-rose-100">Signal 100 in effect. Low interval beep active.</p> : null}
         </div>
@@ -1715,7 +1726,7 @@ function ToneBoardModule({
         </div>
       </div>
       {toneError ? <div className="mb-4 rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">{toneError}</div> : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className={`grid gap-3 ${compact ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-4"}`}>
         {toneConfig.map((tone) => (
           <button
             key={tone.label}

@@ -25,6 +25,8 @@ function isAllowedDuringMaintenance(pathname: string) {
     pathname.startsWith("/api/auth/steam/") ||
     pathname === "/api/auth/discord/sync" ||
     pathname.startsWith("/api/membership/") ||
+    pathname.startsWith("/api/fto") ||
+    pathname.startsWith("/api/partner") ||
     pathname === "/api/admin/system-settings/maintenance" ||
     pathname.startsWith("/api/admin/")
   );

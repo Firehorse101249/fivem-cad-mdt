@@ -5,11 +5,14 @@ import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
 type RoleBody = {
   description?: unknown;
+  department_key?: unknown;
   id?: unknown;
   key?: unknown;
   name?: unknown;
   permission_keys?: unknown;
   priority?: unknown;
+  rank_order?: unknown;
+  role_kind?: unknown;
 };
 
 function text(value: unknown) {
@@ -82,10 +85,13 @@ export async function POST(request: Request) {
   }
 
   const payload = {
+    department_key: text(body.department_key) || null,
     description: text(body.description),
     key: key || name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
     name,
     priority: typeof body.priority === "number" && Number.isFinite(body.priority) ? body.priority : 0,
+    rank_order: typeof body.rank_order === "number" && Number.isFinite(body.rank_order) ? body.rank_order : null,
+    role_kind: ["system", "rank", "general"].includes(text(body.role_kind)) ? text(body.role_kind) : "general",
     updated_at: new Date().toISOString(),
   };
   const result = id

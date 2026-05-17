@@ -7,6 +7,7 @@ const tiles = [
   ["Users", "/admin/users", "Manage account roles, password resets, and access assignments."],
   ["Roles", "/admin/roles", "Customize roles and their permissions."],
   ["Certifications", "/admin/certifications", "Configure department-style certifications and module access."],
+  ["FTO", "/admin/fto", "Manage field training assignments, checklist templates, and trainee progress."],
   ["Audit", "/admin/audit", "Review sensitive admin and membership events."],
   ["System", "/admin/system", "Maintenance and system controls."],
 ];

@@ -36,6 +36,7 @@ import {
 import type { ActivityLogEntry, Agency, Bolo, LookupTab, MdtCall, MdtSession, OfficerModule, PenalCodeEntry, UnitRosterEntry, UnitStatus } from "./types";
 
 const sessionKey = "sentinel-officer-mdt-session";
+const partnerOriginalCallsignKey = "sentinel-officer-original-callsign";
 const toneById = Object.fromEntries(toneConfig.map((tone) => [tone.id, tone])) as Record<ToneConfig["id"], ToneConfig>;
 
 type RmsAction = "Arrest Report" | "Citation" | "Field Interview" | "Fix-it Ticket" | "Incident Report" | "Warning";
@@ -45,12 +46,27 @@ type RmsSeed = {
   subject?: CadLookupDetail;
 };
 
+type RmsMention = {
+  id: string;
+  label: string;
+  type: "call" | "officer" | "person" | "report" | "vehicle" | "weapon";
+};
+
+type RmsOfficer = {
+  callsign: string;
+  name: string;
+  role: string;
+  userId?: string;
+};
+
 type RmsDraft = {
   action: RmsAction;
   callNumber: string;
   charges: PenalCodeEntry[];
   location: string;
+  mentions: RmsMention[];
   narrative: string;
+  officers: RmsOfficer[];
   primarySubject: CadLookupDetail | null;
   reportNumber: string;
   status: "Draft" | "Submitted";
@@ -58,6 +74,21 @@ type RmsDraft = {
   vehicles: string[];
   weapons: string[];
   witnesses: string[];
+};
+
+type PartnerRequest = {
+  combined_callsign: string;
+  created_at: string;
+  id: string;
+  requester_callsign: string;
+  requester_name: string | null;
+  target_callsign: string;
+};
+
+type PartnerSession = {
+  combined_callsign: string;
+  id: string;
+  members: Array<{ callsign: string; name: string; role: string; userId?: string }>;
 };
 
 function nowTime() {
@@ -140,6 +171,9 @@ export function OfficerMdt() {
   const [rmsSeed, setRmsSeed] = useState<RmsSeed>({ action: "Incident Report" });
   const [rmsNotice, setRmsNotice] = useState("RMS drafts save to the selected civilian profile history.");
   const [reviewedReport, setReviewedReport] = useState<RmsReportReview | null>(null);
+  const [partnerRequests, setPartnerRequests] = useState<PartnerRequest[]>([]);
+  const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [partnerNotice, setPartnerNotice] = useState("");
   const [unitRowId, setUnitRowId] = useState("");
   const [userId, setUserId] = useState("");
   const [syncNotice, setSyncNotice] = useState("Loading Supabase CAD data...");
@@ -218,6 +252,37 @@ export function OfficerMdt() {
 
   const selectedCall = calls.find((call) => call.id === selectedCallId) ?? calls[0] ?? null;
 
+  const loadPartnerState = useCallback(async (currentSession: MdtSession) => {
+    try {
+      const response = await fetch(`/api/partner?callsign=${encodeURIComponent(currentSession.callsign)}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setPartnerNotice(result.error ?? "Partner sync unavailable.");
+        return;
+      }
+      setPartnerRequests(result.requests ?? []);
+      setPartnerSession(result.session ?? null);
+      if (result.session?.combined_callsign && currentSession.callsign !== result.session.combined_callsign) {
+        window.localStorage.setItem(partnerOriginalCallsignKey, currentSession.callsign);
+        const nextSession = { ...currentSession, callsign: result.session.combined_callsign };
+        setSession(nextSession);
+        window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+      }
+    } catch {
+      setPartnerNotice("Partner sync unavailable.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    const initialTimer = window.setTimeout(() => void loadPartnerState(session), 0);
+    const intervalId = window.setInterval(() => void loadPartnerState(session), 4000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [loadPartnerState, session]);
+
   useEffect(() => {
     if (!session) return;
     const currentUnit = roster.find((unit) => (unitRowId && unit.id === unitRowId) || unit.callsign === session.callsign);
@@ -268,6 +333,7 @@ export function OfficerMdt() {
 
   async function startSession(nextSession: MdtSession) {
     window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+    window.localStorage.removeItem(partnerOriginalCallsignKey);
     setSession(nextSession);
     setStatus("Available");
     const supabase = getSupabaseBrowserClient();
@@ -280,6 +346,7 @@ export function OfficerMdt() {
         setSyncNotice(error instanceof Error ? error.message : "Could not sync unit duty status.");
       }
     }
+    void loadPartnerState(nextSession);
     addLog(`${nextSession.callsign} logged into MDT as ${nextSession.agency} ${nextSession.unitType}.`, "Login");
   }
 
@@ -300,6 +367,68 @@ export function OfficerMdt() {
         }
       }
     }
+  }
+
+  async function requestPartner(targetCallsign: string, combinedCallsign: string) {
+    if (!session) return;
+    const response = await fetch("/api/partner", {
+      body: JSON.stringify({
+        action: "request",
+        combined_callsign: combinedCallsign,
+        officer_name: session.officerName,
+        requester_callsign: session.callsign,
+        target_callsign: targetCallsign,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      setPartnerNotice(result.error ?? "Unable to send partner request.");
+      return;
+    }
+    setPartnerNotice(`Partner request sent to ${targetCallsign}.`);
+    await loadPartnerState(session);
+  }
+
+  async function acceptPartner(requestId: string) {
+    if (!session) return;
+    const response = await fetch("/api/partner", {
+      body: JSON.stringify({
+        action: "accept",
+        officer_name: session.officerName,
+        requester_callsign: session.callsign,
+        request_id: requestId,
+        unit_type: session.unitType,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      setPartnerNotice(result.error ?? "Unable to accept partner request.");
+      return;
+    }
+    await loadPartnerState(session);
+    setPartnerNotice("Partner unit activated.");
+  }
+
+  async function endPartner() {
+    if (!session || !partnerSession) return;
+    await fetch("/api/partner", {
+      body: JSON.stringify({ action: "end", request_id: partnerSession.id }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    const originalCallsign = window.localStorage.getItem(partnerOriginalCallsignKey);
+    if (originalCallsign) {
+      const nextSession = { ...session, callsign: originalCallsign };
+      setSession(nextSession);
+      window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+      window.localStorage.removeItem(partnerOriginalCallsignKey);
+    }
+    setPartnerSession(null);
+    setPartnerNotice("Partner unit ended.");
   }
 
   async function changeStatus(nextStatus: UnitStatus, options: { playPanicTone?: boolean } = {}) {
@@ -601,6 +730,13 @@ export function OfficerMdt() {
           fineTotal: totals.fine,
           jailMonthsTotal: totals.months,
           location: draft.location,
+          mentions: draft.mentions,
+          officers: draft.officers,
+          parties: {
+            primarySubject: subject.id,
+            suspects: draft.suspects,
+            witnesses: draft.witnesses,
+          },
           reportNumber: draft.reportNumber,
           suspects: draft.suspects,
           vehicles: draft.vehicles,
@@ -735,6 +871,7 @@ export function OfficerMdt() {
                 onSelectLookup={openLookupResult}
                 seed={effectiveRmsSeed}
                 selectedLookup={lookupDetail}
+                session={session}
                 reviewedReport={reviewedReport}
                 onSeedChange={setRmsSeed}
               />
@@ -748,6 +885,18 @@ export function OfficerMdt() {
               <PanicPanel active={panicActive} armed={panicArmed} onArm={() => setPanicArmed(true)} onCancel={() => setPanicArmed(false)} onConfirm={activatePanic} />
             ) : null}
             {module === "settings" ? <Settings /> : null}
+            <section className="mt-4">
+              <PartnerPanel
+                notice={partnerNotice}
+                onAccept={acceptPartner}
+                onEnd={endPartner}
+                onRequest={requestPartner}
+                requests={partnerRequests}
+                roster={roster}
+                session={partnerSession}
+                unitCallsign={session.callsign}
+              />
+            </section>
             <section className="mt-4">
               <Panel title="Activity Log">
                 <LogList log={log} />
@@ -1024,6 +1173,66 @@ function MyStatus({ agency, onStatusChange, status }: { agency: Agency; onStatus
   );
 }
 
+function PartnerPanel({
+  notice,
+  onAccept,
+  onEnd,
+  onRequest,
+  requests,
+  roster,
+  session,
+  unitCallsign,
+}: {
+  notice: string;
+  onAccept: (requestId: string) => void;
+  onEnd: () => void;
+  onRequest: (targetCallsign: string, combinedCallsign: string) => void;
+  requests: PartnerRequest[];
+  roster: UnitRosterEntry[];
+  session: PartnerSession | null;
+  unitCallsign: string;
+}) {
+  const [target, setTarget] = useState("");
+  const [combined, setCombined] = useState("");
+  const availablePartners = roster.filter((unit) => unit.callsign !== unitCallsign && unit.agency === "Law Enforcement");
+
+  return (
+    <Panel title="Partner Unit">
+      {session ? (
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <p className="text-sm font-semibold text-white">{session.combined_callsign}</p>
+            <p className="mt-1 text-sm text-neutral-400">{session.members.map((member) => `${member.callsign} ${member.name}`).join(" / ")}</p>
+          </div>
+          <button className="min-h-10 rounded-md border border-rose-300/35 bg-rose-400/10 px-4 text-sm font-semibold text-rose-100 hover:bg-rose-400/20" onClick={onEnd} type="button">End partner unit</button>
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+          <select className="h-10 rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" onChange={(event) => setTarget(event.target.value)} value={target}>
+            <option value="">Select partner unit</option>
+            {availablePartners.map((unit) => <option key={unit.id} value={unit.callsign}>{unit.callsign} / {unit.location}</option>)}
+          </select>
+          <input className="h-10 rounded-md border border-white/10 bg-neutral-950 px-3 text-sm text-white" onChange={(event) => setCombined(event.target.value.toUpperCase())} placeholder="Combined callsign" value={combined} />
+          <button className="min-h-10 rounded-md bg-sky-400 px-4 text-sm font-semibold text-neutral-950 hover:bg-sky-300" onClick={() => target && combined && onRequest(target, combined)} type="button">Invite</button>
+        </div>
+      )}
+      {requests.length && !session ? (
+        <div className="mt-3 space-y-2">
+          {requests.map((request) => (
+            <div className="flex flex-col gap-2 rounded-md border border-white/10 bg-neutral-950 p-3 sm:flex-row sm:items-center sm:justify-between" key={request.id}>
+              <p className="text-sm text-neutral-300">{request.requester_callsign} invited {request.target_callsign} as {request.combined_callsign}</p>
+              {request.target_callsign === unitCallsign ? (
+                <button className="min-h-9 rounded-md border border-emerald-300/40 bg-emerald-300/10 px-3 text-sm font-semibold text-emerald-100" onClick={() => onAccept(request.id)} type="button">Accept</button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {notice ? <p className="mt-3 text-sm text-neutral-400">{notice}</p> : null}
+    </Panel>
+  );
+}
+
 function Lookups({
   detail,
   notice,
@@ -1174,6 +1383,7 @@ function ReportsWorkspace({
   reviewedReport,
   seed,
   selectedLookup,
+  session,
 }: {
   activeCall: MdtCall | null;
   lookupNotice: string;
@@ -1187,6 +1397,7 @@ function ReportsWorkspace({
   reviewedReport: RmsReportReview | null;
   seed: RmsSeed;
   selectedLookup: CadLookupDetail | null;
+  session: MdtSession;
 }) {
   const [mode, setMode] = useState<"create" | "menu" | "review">("menu");
   const [reportNumber, setReportNumber] = useState("");
@@ -1224,6 +1435,7 @@ function ReportsWorkspace({
         onSelectLookup={onSelectLookup}
         seed={seed}
         selectedLookup={selectedLookup}
+        session={session}
       />
     );
   }
@@ -1268,6 +1480,8 @@ function ReportReviewPanel({ report }: { report: RmsReportReview | null }) {
   if (!report) return <Panel title="Report"><Notice text="No report loaded." /></Panel>;
   const meta = report.metadata;
   const charges = Array.isArray(meta.charges) ? meta.charges as PenalCodeEntry[] : [];
+  const mentions = Array.isArray(meta.mentions) ? meta.mentions as RmsMention[] : [];
+  const officers = Array.isArray(meta.officers) ? meta.officers as RmsOfficer[] : [];
   return (
     <div className="rounded-md bg-neutral-800/60 p-3 text-neutral-950">
       <div className="mx-auto max-w-[900px] bg-[#fbfaf1] p-5 shadow-2xl ring-1 ring-black/20">
@@ -1281,6 +1495,18 @@ function ReportReviewPanel({ report }: { report: RmsReportReview | null }) {
         </PaperSection>
         <PaperSection title="Narrative / Record">
           <pre className="whitespace-pre-wrap border border-neutral-950 bg-[#fffdf5] p-3 font-mono text-sm leading-6 text-neutral-950">{report.description}</pre>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {mentions.map((mention) => (
+              <button key={`${mention.type}-${mention.id}`} type="button" className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs font-bold uppercase">
+                @{mention.label}
+              </button>
+            ))}
+          </div>
+        </PaperSection>
+        <PaperSection title="Officers Involved">
+          <div className="space-y-1">
+            {officers.length ? officers.map((officer) => <p key={`${officer.callsign}-${officer.name}`} className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs">{officer.callsign} / {officer.name} / {officer.role}</p>) : <p className="text-sm text-neutral-700">No officers listed.</p>}
+          </div>
         </PaperSection>
         <PaperSection title="Charges / Totals">
           <div className="grid grid-cols-2 gap-px bg-neutral-950">
@@ -1318,6 +1544,7 @@ function RmsWriter({
   onSelectLookup,
   seed,
   selectedLookup,
+  session,
 }: {
   activeCall: MdtCall | null;
   lookupNotice: string;
@@ -1328,13 +1555,15 @@ function RmsWriter({
   onSelectLookup: (result: CadLookupResult) => void;
   seed: RmsSeed;
   selectedLookup: CadLookupDetail | null;
+  session: MdtSession;
 }) {
-  const [draft, setDraft] = useState<RmsDraft>(() => makeRmsDraft(seed, activeCall));
+  const [draft, setDraft] = useState<RmsDraft>(() => makeRmsDraft(seed, activeCall, session));
   const [chargeQuery, setChargeQuery] = useState("");
   const [witnessInput, setWitnessInput] = useState("");
   const [suspectInput, setSuspectInput] = useState("");
   const [vehicleInput, setVehicleInput] = useState("");
   const [weaponInput, setWeaponInput] = useState("");
+  const [officerInput, setOfficerInput] = useState("");
   const [attachQuery, setAttachQuery] = useState("");
   const [attachScope, setAttachScope] = useState<CadLookupScope>("Name");
   const totals = chargeTotals(draft.charges);
@@ -1347,11 +1576,50 @@ function RmsWriter({
     setDraft((current) => ({ ...current, ...patchValue }));
   }
 
+  function addMention(mention: RmsMention) {
+    setDraft((current) => ({
+      ...current,
+      mentions: current.mentions.some((item) => item.type === mention.type && item.id === mention.id)
+        ? current.mentions
+        : [...current.mentions, mention],
+    }));
+  }
+
+  function insertMention(mention: RmsMention) {
+    patch({ narrative: `${draft.narrative}${draft.narrative.endsWith(" ") || !draft.narrative ? "" : " "}@${mention.label} ` });
+  }
+
   function addListValue(key: "suspects" | "vehicles" | "weapons" | "witnesses", value: string, clear: (value: string) => void) {
     const nextValue = value.trim();
     if (!nextValue) return;
-    setDraft((current) => ({ ...current, [key]: [...current[key], nextValue] }));
+    setDraft((current) => {
+      const exists = current[key].some((item) => item.trim().toLowerCase() === nextValue.toLowerCase());
+      return exists ? current : { ...current, [key]: [...current[key], nextValue] };
+    });
     clear("");
+  }
+
+  function removeListValue(key: "suspects" | "vehicles" | "weapons" | "witnesses", value: string) {
+    setDraft((current) => ({ ...current, [key]: current[key].filter((item) => item !== value) }));
+  }
+
+  function addSelectedParty(key: "suspects" | "witnesses") {
+    if (!selectedLookup || !selectedName) return;
+    setDraft((current) => {
+      const exists = current[key].some((item) => item.trim().toLowerCase() === selectedName.toLowerCase());
+      return exists ? current : { ...current, [key]: [...current[key], selectedName] };
+    });
+    addMention({ id: selectedLookup.civilian.id, label: selectedName, type: "person" });
+  }
+
+  function addOfficer(value: string) {
+    const nextValue = value.trim();
+    if (!nextValue) return;
+    setDraft((current) => {
+      const exists = current.officers.some((officer) => `${officer.callsign} ${officer.name}`.toLowerCase().includes(nextValue.toLowerCase()));
+      return exists ? current : { ...current, officers: [...current.officers, { callsign: nextValue.toUpperCase(), name: nextValue, role: "Assisting Officer" }] };
+    });
+    setOfficerInput("");
   }
 
   const selectedName = selectedLookup ? `${selectedLookup.civilian.first_name} ${selectedLookup.civilian.last_name}`.trim() : "";
@@ -1412,9 +1680,9 @@ function RmsWriter({
           <div className="mt-3 flex flex-wrap gap-2">
             {selectedLookup ? (
               <>
-                <button type="button" onClick={() => patch({ primarySubject: selectedLookup })} className="min-h-9 border border-neutral-950 bg-neutral-950 px-3 text-xs font-black uppercase tracking-[0.14em] text-white">Use selected as subject</button>
-                <button type="button" onClick={() => patch({ witnesses: [...draft.witnesses, selectedName] })} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected witness</button>
-                <button type="button" onClick={() => patch({ suspects: [...draft.suspects, selectedName] })} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected suspect</button>
+                <button type="button" onClick={() => { patch({ primarySubject: selectedLookup }); addMention({ id: selectedLookup.civilian.id, label: selectedName, type: "person" }); }} className="min-h-9 border border-neutral-950 bg-neutral-950 px-3 text-xs font-black uppercase tracking-[0.14em] text-white">Use selected as subject</button>
+                <button type="button" onClick={() => addSelectedParty("witnesses")} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected witness</button>
+                <button type="button" onClick={() => addSelectedParty("suspects")} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected suspect</button>
               </>
             ) : null}
           </div>
@@ -1429,14 +1697,35 @@ function RmsWriter({
             <span className="block border border-b-0 border-neutral-950 bg-neutral-200 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]">Narrative / Probable Cause / Disposition</span>
             <textarea value={draft.narrative} onChange={(event) => patch({ narrative: event.target.value })} className="min-h-56 w-full resize-y border border-neutral-950 bg-[#fffdf5] px-3 py-2 font-mono text-sm leading-6 text-neutral-950 outline-none" />
           </label>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {draft.mentions.map((mention) => (
+              <button key={`${mention.type}-${mention.id}`} type="button" onClick={() => insertMention(mention)} className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs font-bold uppercase">
+                @{mention.label}
+              </button>
+            ))}
+          </div>
         </PaperSection>
 
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           <PaperSection title="Parties / Property">
-            <PaperListEditor title="Witnesses" value={witnessInput} items={draft.witnesses} onValueChange={setWitnessInput} onAdd={() => addListValue("witnesses", witnessInput, setWitnessInput)} />
-            <PaperListEditor title="Additional Suspects" value={suspectInput} items={draft.suspects} onValueChange={setSuspectInput} onAdd={() => addListValue("suspects", suspectInput, setSuspectInput)} />
-            <PaperListEditor title="Vehicles" value={vehicleInput} items={draft.vehicles} onValueChange={setVehicleInput} onAdd={() => addListValue("vehicles", vehicleInput, setVehicleInput)} />
-            <PaperListEditor title="Weapons / Evidence" value={weaponInput} items={draft.weapons} onValueChange={setWeaponInput} onAdd={() => addListValue("weapons", weaponInput, setWeaponInput)} />
+            <PaperListEditor title="Witnesses" value={witnessInput} items={draft.witnesses} onValueChange={setWitnessInput} onAdd={() => addListValue("witnesses", witnessInput, setWitnessInput)} onRemove={(item) => removeListValue("witnesses", item)} />
+            <PaperListEditor title="Additional Suspects" value={suspectInput} items={draft.suspects} onValueChange={setSuspectInput} onAdd={() => addListValue("suspects", suspectInput, setSuspectInput)} onRemove={(item) => removeListValue("suspects", item)} />
+            <PaperListEditor title="Vehicles" value={vehicleInput} items={draft.vehicles} onValueChange={setVehicleInput} onAdd={() => addListValue("vehicles", vehicleInput, setVehicleInput)} onRemove={(item) => removeListValue("vehicles", item)} />
+            <PaperListEditor title="Weapons / Evidence" value={weaponInput} items={draft.weapons} onValueChange={setWeaponInput} onAdd={() => addListValue("weapons", weaponInput, setWeaponInput)} onRemove={(item) => removeListValue("weapons", item)} />
+            <div className="border-t border-neutral-950 pt-3">
+              <p className="mb-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-700">Officers Involved</p>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input value={officerInput} onChange={(event) => setOfficerInput(event.target.value)} className="h-9 border border-neutral-950 bg-[#fffdf5] px-2 text-sm outline-none" placeholder="Callsign or officer name" />
+                <button type="button" onClick={() => addOfficer(officerInput)} className="h-9 border border-neutral-950 px-3 text-xs font-black uppercase">Add</button>
+              </div>
+              <div className="mt-2 space-y-1">
+                {draft.officers.map((officer) => (
+                  <button key={`${officer.callsign}-${officer.name}`} type="button" onClick={() => patch({ officers: draft.officers.filter((item) => item !== officer) })} className="block w-full border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-left text-xs">
+                    {officer.callsign} / {officer.name} / {officer.role}
+                  </button>
+                ))}
+              </div>
+            </div>
           </PaperSection>
 
           <PaperSection title="Charges / Penalty Calculation">
@@ -1476,14 +1765,21 @@ function RmsWriter({
   );
 }
 
-function makeRmsDraft(seed: RmsSeed, activeCall: MdtCall | null): RmsDraft {
+function makeRmsDraft(seed: RmsSeed, activeCall: MdtCall | null, session: MdtSession): RmsDraft {
   const stamp = Date.now().toString().slice(-6);
+  const subjectName = seed.subject ? `${seed.subject.civilian.first_name} ${seed.subject.civilian.last_name}`.trim() : "";
   return {
     action: seed.action,
     callNumber: activeCall?.callNumber ?? "",
     charges: [],
     location: activeCall?.address ?? "",
+    mentions: [
+      ...(seed.subject && subjectName ? [{ id: seed.subject.civilian.id, label: subjectName, type: "person" as const }] : []),
+      ...(activeCall ? [{ id: activeCall.id, label: activeCall.callNumber, type: "call" as const }] : []),
+      { id: session.callsign, label: session.callsign, type: "officer" as const },
+    ],
     narrative: activeCall ? `Related call ${activeCall.callNumber}: ${activeCall.incidentType}\n\n` : "",
+    officers: [{ callsign: session.callsign, name: session.officerName, role: "Reporting Officer" }],
     primarySubject: seed.subject ?? null,
     reportNumber: `RMS-${new Date().getFullYear()}-${stamp}`,
     status: "Draft",
@@ -1532,7 +1828,7 @@ function PaperSelect({ label, onChange, options, value }: { label: string; onCha
   );
 }
 
-function PaperListEditor({ items, onAdd, onValueChange, title, value }: { items: string[]; onAdd: () => void; onValueChange: (value: string) => void; title: string; value: string }) {
+function PaperListEditor({ items, onAdd, onRemove, onValueChange, title, value }: { items: string[]; onAdd: () => void; onRemove: (item: string) => void; onValueChange: (value: string) => void; title: string; value: string }) {
   return (
     <div className="mb-4 last:mb-0">
       <p className="mb-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-700">{title}</p>
@@ -1541,7 +1837,11 @@ function PaperListEditor({ items, onAdd, onValueChange, title, value }: { items:
         <button type="button" onClick={onAdd} className="h-9 border border-neutral-950 px-3 text-xs font-black uppercase">Add</button>
       </div>
       <div className="mt-2 space-y-1">
-        {items.length ? items.map((item) => <p key={item} className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs">{item}</p>) : <p className="text-xs text-neutral-600">None listed.</p>}
+        {items.length ? items.map((item) => (
+          <button key={item} type="button" onClick={() => onRemove(item)} className="block w-full border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-left text-xs">
+            {item}
+          </button>
+        )) : <p className="text-xs text-neutral-600">None listed.</p>}
       </div>
     </div>
   );

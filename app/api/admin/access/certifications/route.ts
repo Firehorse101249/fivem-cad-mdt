@@ -5,6 +5,8 @@ import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
 
 type CertificationBody = {
   description?: unknown;
+  certification_kind?: unknown;
+  department_key?: unknown;
   id?: unknown;
   key?: unknown;
   name?: unknown;
@@ -68,6 +70,10 @@ export async function POST(request: Request) {
 
   const supabaseAdmin = getSupabaseAdminClient();
   const payload = {
+    certification_kind: ["subdivision", "perk", "certification", "tier"].includes(text(body.certification_kind))
+      ? text(body.certification_kind)
+      : "certification",
+    department_key: text(body.department_key) || null,
     description: text(body.description),
     key: key || name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
     name,
