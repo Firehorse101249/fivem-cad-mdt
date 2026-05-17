@@ -16,9 +16,15 @@ function isAllowedDuringMaintenance(pathname: string) {
   return (
     pathname === "/maintenance" ||
     pathname === "/login" ||
+    pathname === "/signup" ||
+    pathname === "/membership" ||
+    pathname.startsWith("/membership/") ||
     pathname === "/admin" ||
     pathname.startsWith("/admin/") ||
     pathname === "/api/auth/session" ||
+    pathname.startsWith("/api/auth/steam/") ||
+    pathname === "/api/auth/discord/sync" ||
+    pathname.startsWith("/api/membership/") ||
     pathname === "/api/admin/system-settings/maintenance" ||
     pathname.startsWith("/api/admin/")
   );

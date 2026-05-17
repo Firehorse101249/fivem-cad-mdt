@@ -1,13 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/src/lib/supabaseAdmin";
-import { isNonEmptyString, isValidSteamHex } from "@/src/lib/userRules";
+import { isNonEmptyString } from "@/src/lib/userRules";
 
 type SignupBody = {
   email?: unknown;
   password?: unknown;
   display_name?: unknown;
-  steam_hex?: unknown;
 };
 
 function errorResponse(message: string, status: number) {
@@ -26,14 +25,9 @@ export async function POST(request: Request) {
   const email = isNonEmptyString(body.email) ? body.email.trim() : "";
   const password = isNonEmptyString(body.password) ? body.password : "";
   const displayName = isNonEmptyString(body.display_name) ? body.display_name.trim() : "";
-  const steamHex = isNonEmptyString(body.steam_hex) ? body.steam_hex.trim() : "";
 
-  if (!email || !password || !displayName || !steamHex) {
-    return errorResponse("Email, password, display name, and Steam Hex ID are required.", 400);
-  }
-
-  if (!isValidSteamHex(steamHex)) {
-    return errorResponse("Steam Hex ID must look like steam:110000112345678 or a raw hex value.", 400);
+  if (!email || !password || !displayName) {
+    return errorResponse("Email, password, and display name are required.", 400);
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -57,7 +51,6 @@ export async function POST(request: Request) {
       data: {
         display_name: displayName,
         role: "civilian",
-        steam_hex: steamHex,
       },
     },
   });
@@ -80,7 +73,7 @@ export async function POST(request: Request) {
       email,
       role: "civilian",
       display_name: displayName,
-      steam_hex: steamHex,
+      membership_status: "not_applied",
       updated_at: new Date().toISOString(),
     });
 

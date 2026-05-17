@@ -155,10 +155,10 @@ export default function Home() {
             Donate
           </Link>
           <Link
-            href="/login"
+            href="/membership"
             className="inline-flex items-center gap-2 rounded-md bg-cyan-300 px-4 py-2 font-semibold text-neutral-950 hover:bg-cyan-200"
           >
-            Member login <ArrowIcon />
+            Apply <ArrowIcon />
           </Link>
         </nav>
       </header>
@@ -185,10 +185,10 @@ export default function Home() {
                 {discordIsReady ? "Join our Discord" : "Discord invite coming soon"} <ArrowIcon />
               </CommunityLink>
               <Link
-                href="/login"
+                href="/membership"
                 className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-white/15 px-5 py-3 font-semibold text-white hover:bg-white/10"
               >
-                CAD login <ArrowIcon />
+                Apply / status <ArrowIcon />
               </Link>
               <Link
                 href="/support"
@@ -279,10 +279,10 @@ export default function Home() {
               </h2>
             </div>
             <Link
-              href="/signup"
+              href="/membership"
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
             >
-              Request an account <ArrowIcon />
+              Apply for membership <ArrowIcon />
             </Link>
           </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

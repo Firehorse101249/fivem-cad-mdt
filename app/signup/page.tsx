@@ -4,8 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
-const STEAM_HEX_PATTERN = /^(steam:)?[0-9a-f]{8,32}$/i;
-
 type SignupResponse = {
   success: boolean;
   error?: string;
@@ -18,7 +16,6 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [steamHex, setSteamHex] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -30,11 +27,6 @@ export default function SignupPage() {
 
     if (password !== confirmPassword) {
       setError("Passwords must match.");
-      return;
-    }
-
-    if (!STEAM_HEX_PATTERN.test(steamHex.trim())) {
-      setError("Steam Hex ID must look like steam:110000112345678 or a raw hex value.");
       return;
     }
 
@@ -50,7 +42,6 @@ export default function SignupPage() {
           email,
           password,
           display_name: displayName,
-          steam_hex: steamHex,
         }),
       });
 
@@ -81,11 +72,11 @@ export default function SignupPage() {
             <span className="text-xl font-semibold text-white">Sentinel CAD/MDT</span>
           </Link>
           <h1 className="text-5xl font-semibold leading-tight text-white">
-            Request civilian access.
+            Create your website account.
           </h1>
           <p className="mt-5 text-lg leading-8 text-neutral-300">
-            Public signups are always created as civilian accounts. Department
-            permissions can only be changed later by an administrator.
+            After signup, connect Discord and Steam, then submit your whitelist
+            application from the membership portal.
           </p>
         </div>
       </section>
@@ -98,14 +89,13 @@ export default function SignupPage() {
             </Link>
             <h2 className="mt-5 text-3xl font-semibold text-white">Create account</h2>
             <p className="mt-2 text-sm text-neutral-400">
-              Steam Hex ID is required for CAD/MDT identity matching.
+              Steam and Discord linking happens after your account is created.
             </p>
           </div>
 
           <form onSubmit={handleSignup} className="space-y-5">
             <TextInput label="Email" type="email" value={email} onChange={setEmail} placeholder="civilian@example.com" />
             <TextInput label="Display name" value={displayName} onChange={setDisplayName} placeholder="Jane Civilian" />
-            <TextInput label="Steam Hex ID" value={steamHex} onChange={setSteamHex} placeholder="steam:110000112345678" />
             <TextInput label="Password" type="password" value={password} onChange={setPassword} placeholder="Minimum 6 characters" minLength={6} />
             <TextInput label="Confirm password" type="password" value={confirmPassword} onChange={setConfirmPassword} placeholder="Repeat password" minLength={6} />
 

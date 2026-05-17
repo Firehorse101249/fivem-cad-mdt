@@ -57,7 +57,7 @@ export default function LoginPage() {
       }
     }
 
-    router.push("/cad");
+    router.push("/membership");
     router.refresh();
   }
 

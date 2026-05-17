@@ -19,6 +19,21 @@ export const AUDIT_LOG_TYPES = [
   "civilian_record_updated",
   "civilian_record_deleted",
   "system_setting_changed",
+  "steam_identity_linked",
+  "discord_identity_linked",
+  "membership_application_submitted",
+  "membership_application_approved",
+  "membership_application_denied",
+  "membership_interview_saved",
+  "membership_interview_accepted",
+  "membership_interview_denied",
+  "membership_question_created",
+  "membership_question_updated",
+  "access_role_created",
+  "access_role_updated",
+  "access_certification_created",
+  "access_certification_updated",
+  "user_access_updated",
 ] as const;
 
 export type AuditLogType = (typeof AUDIT_LOG_TYPES)[number] | (string & {});

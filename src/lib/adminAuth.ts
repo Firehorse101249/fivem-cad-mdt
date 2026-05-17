@@ -1,5 +1,6 @@
 import { createClient, type User } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { getUserPermissions } from "./permissions";
 
 const ADMIN_ACCESS_COOKIE = "sb-access-token";
 
@@ -77,7 +78,15 @@ export async function isAdminAccessAllowed(accessToken: string) {
     .eq("id", data.user.id)
     .maybeSingle<{ role: string }>();
 
-  return !profileError && profile?.role === "admin";
+  if (!profileError && profile?.role === "admin") {
+    return true;
+  }
+
+  try {
+    return (await getUserPermissions(data.user.id)).has("admin:access");
+  } catch {
+    return false;
+  }
 }
 
 export async function requireAdmin(request: Request): Promise<AdminAuthResult> {
