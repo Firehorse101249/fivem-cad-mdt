@@ -66,6 +66,8 @@ export type DispatchCall = {
 export type DispatchUnit = {
   agency: string;
   assignedCall: string;
+  departmentKey?: string;
+  departmentLabel?: string;
   id: string;
   lastUpdate: string;
   location: string;

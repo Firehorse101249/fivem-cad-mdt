@@ -7,15 +7,25 @@ import type {
   UnitStatus,
   UnitType,
 } from "./types";
+import { departmentCatalog } from "@/src/lib/departments";
 
 export const agencyOptions: Agency[] = ["Law Enforcement", "Fire", "EMS", "Tow"];
 
 export const agencyUnitTypes: Record<Agency, UnitType[]> = {
-  "Law Enforcement": ["Patrol", "Supervisor", "K9", "SWAT", "Traffic"],
+  "Law Enforcement": ["Patrol", "Supervisor", "K9", "SWAT", "Traffic", "Detective", "Air"],
   Fire: ["Engine", "Ladder", "Rescue", "Battalion", "Brush"],
   EMS: ["Medic", "Ambulance", "Supervisor", "Air Medical"],
   Tow: ["Flatbed", "Heavy", "Standard"],
 };
+
+export const mdtDepartments = departmentCatalog
+  .filter((department) => ["Law Enforcement", "Fire", "EMS", "Tow"].includes(department.service))
+  .map((department) => ({
+    key: department.key,
+    label: department.abbreviation,
+    name: department.name,
+    serviceType: department.service as Agency,
+  }));
 
 export const officerModules: Array<{
   agencies: Agency[];
@@ -24,16 +34,16 @@ export const officerModules: Array<{
   priority?: "primary" | "muted";
 }> = [
   { agencies: agencyOptions, id: "home", label: "Home", priority: "primary" },
-  { agencies: agencyOptions, id: "active-calls", label: "Active Calls", priority: "primary" },
+  { agencies: agencyOptions, id: "active-calls", label: "Calls", priority: "primary" },
   { agencies: agencyOptions, id: "my-status", label: "My Status", priority: "primary" },
-  { agencies: agencyOptions, id: "lookups", label: "Lookups", priority: "primary" },
-  { agencies: agencyOptions, id: "reports", label: "Reports", priority: "primary" },
+  { agencies: agencyOptions, id: "lookups", label: "Lookup", priority: "primary" },
+  { agencies: agencyOptions, id: "reports", label: "RMS", priority: "primary" },
   { agencies: ["Law Enforcement"], id: "warrants", label: "Warrants" },
   { agencies: ["Law Enforcement"], id: "bolos", label: "BOLOs" },
   { agencies: ["Law Enforcement"], id: "penal-code", label: "Penal Code" },
   { agencies: agencyOptions, id: "department-policies", label: "Department Policies" },
   { agencies: agencyOptions, id: "supervisor-panel", label: "Supervisor Panel" },
-  { agencies: agencyOptions, id: "panic", label: "Panic / Emergency", priority: "primary" },
+  { agencies: agencyOptions, id: "panic", label: "Panic", priority: "primary" },
   { agencies: agencyOptions, id: "settings", label: "Settings", priority: "muted" },
 ];
 

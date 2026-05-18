@@ -29,19 +29,22 @@ export async function GET(request: Request) {
   }
 
   const supabaseAdmin = getSupabaseAdminClient();
-  const [{ data: certifications, error }, { data: permissions }] = await Promise.all([
+  const [{ data: certifications, error }, { data: permissions }, { data: departments }] = await Promise.all([
     supabaseAdmin
       .from("access_certifications")
       .select("*, access_certification_permissions(permission_key)")
+      .order("department_key", { ascending: true, nullsFirst: true })
+      .order("certification_kind", { ascending: true })
       .order("name", { ascending: true }),
     supabaseAdmin.from("access_permissions").select("*").order("category", { ascending: true }).order("key", { ascending: true }),
+    supabaseAdmin.from("access_departments").select("*").order("sort_order", { ascending: true }),
   ]);
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 });
   }
 
-  return NextResponse.json({ certifications: certifications ?? [], permissions: permissions ?? [], success: true });
+  return NextResponse.json({ certifications: certifications ?? [], departments: departments ?? [], permissions: permissions ?? [], success: true });
 }
 
 export async function POST(request: Request) {

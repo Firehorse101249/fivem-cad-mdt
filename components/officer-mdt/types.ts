@@ -6,6 +6,8 @@ export type UnitType =
   | "K9"
   | "SWAT"
   | "Traffic"
+  | "Detective"
+  | "Air"
   | "Engine"
   | "Ladder"
   | "Rescue"
@@ -60,7 +62,10 @@ export type Priority = "Low" | "Medium" | "High" | "Critical";
 export type MdtSession = {
   agency: Agency;
   callsign: string;
+  departmentKey: string;
+  departmentLabel: string;
   officerName: string;
+  serviceType: Agency;
   shiftStartedAt: string;
   unitType: UnitType;
 };
@@ -116,6 +121,8 @@ export type UnitRosterEntry = {
   agency: Agency;
   assignedCall: string;
   callsign: string;
+  departmentKey: string;
+  departmentLabel: string;
   id: string;
   location: string;
   status: UnitStatus;

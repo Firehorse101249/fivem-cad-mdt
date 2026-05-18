@@ -25,17 +25,30 @@ export async function GET(request: Request, context: RouteContext) {
 
   const { userId } = await context.params;
   const supabaseAdmin = getSupabaseAdminClient();
-  const [{ data: roleAssignments }, { data: certificationAssignments }, { data: roles }, { data: certifications }] =
+  const [{ data: roleAssignments }, { data: certificationAssignments }, { data: roles }, { data: certifications }, { data: departments }] =
     await Promise.all([
       supabaseAdmin.from("user_access_roles").select("role_id").eq("user_id", userId),
       supabaseAdmin.from("user_access_certifications").select("certification_id").eq("user_id", userId),
-      supabaseAdmin.from("access_roles").select("*").order("priority", { ascending: false }),
-      supabaseAdmin.from("access_certifications").select("*").order("name", { ascending: true }),
+      supabaseAdmin
+        .from("access_roles")
+        .select("*")
+        .order("department_key", { ascending: true, nullsFirst: true })
+        .order("role_kind", { ascending: true })
+        .order("rank_order", { ascending: true, nullsFirst: false })
+        .order("priority", { ascending: false }),
+      supabaseAdmin
+        .from("access_certifications")
+        .select("*")
+        .order("department_key", { ascending: true, nullsFirst: true })
+        .order("certification_kind", { ascending: true })
+        .order("name", { ascending: true }),
+      supabaseAdmin.from("access_departments").select("*").order("sort_order", { ascending: true }),
     ]);
 
   return NextResponse.json({
     certificationAssignments: certificationAssignments ?? [],
     certifications: certifications ?? [],
+    departments: departments ?? [],
     roleAssignments: roleAssignments ?? [],
     roles: roles ?? [],
     success: true,

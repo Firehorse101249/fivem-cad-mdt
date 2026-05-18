@@ -224,9 +224,12 @@ function mapDispatchCall(row: Row): DispatchCall {
 
 function mapDispatchUnit(row: Row, callNumberById: Map<string, string>): DispatchUnit {
   const currentCallId = text(row.current_call_id);
+  const meta = metadata(row);
   return {
     agency: text(row.agency),
     assignedCall: currentCallId ? callNumberById.get(currentCallId) ?? currentCallId : "None",
+    departmentKey: text(meta.department_key),
+    departmentLabel: text(meta.department_label),
     id: text(row.id),
     lastUpdate: timeLabel(row.updated_at || row.created_at),
     location: text(row.location) || text(row.postal),
@@ -559,6 +562,11 @@ export async function upsertOfficerUnit(supabase: SupabaseClient, session: MdtSe
     callsign: session.callsign,
     created_by: userId || null,
     member_name: session.officerName,
+    metadata: {
+      department_key: session.departmentKey || null,
+      department_label: session.departmentLabel || null,
+      service_type: session.serviceType || session.agency,
+    },
     status,
     unit_type: session.unitType,
     updated_at: new Date().toISOString(),
@@ -609,6 +617,8 @@ export function dispatchUnitsToRoster(units: DispatchUnit[]): UnitRosterEntry[] 
     agency: unit.type as Agency,
     assignedCall: unit.assignedCall,
     callsign: unit.unit,
+    departmentKey: unit.departmentKey ?? "",
+    departmentLabel: unit.departmentLabel || unit.agency,
     id: unit.id,
     location: unit.location,
     status: unit.status as UnitRosterEntry["status"],

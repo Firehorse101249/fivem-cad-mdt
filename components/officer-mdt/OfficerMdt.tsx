@@ -27,6 +27,7 @@ import {
   agencyOptions,
   agencyUnitTypes,
   lookupTabs,
+  mdtDepartments,
   officerModules,
   penalCode,
   policies,
@@ -52,6 +53,11 @@ type RmsMention = {
   type: "call" | "officer" | "person" | "report" | "vehicle" | "weapon";
 };
 
+type RmsAttachment = RmsMention & {
+  detail?: string;
+  role: "Primary Subject" | "Suspect" | "Witness" | "Vehicle" | "Weapon" | "Call" | "Officer" | "Reference";
+};
+
 type RmsOfficer = {
   callsign: string;
   name: string;
@@ -61,6 +67,7 @@ type RmsOfficer = {
 
 type RmsDraft = {
   action: RmsAction;
+  attachments: RmsAttachment[];
   callNumber: string;
   charges: PenalCodeEntry[];
   location: string;
@@ -156,6 +163,29 @@ function rmsRecordType(action: RmsAction): RmsRecordType {
   return "Notes/history";
 }
 
+function defaultDepartment(agency: Agency) {
+  return mdtDepartments.find((department) => department.serviceType === agency) ?? mdtDepartments[0];
+}
+
+function normalizeSession(session: Partial<MdtSession> & { agency?: Agency }): MdtSession {
+  const serviceType = session.serviceType ?? session.agency ?? "Law Enforcement";
+  const department = mdtDepartments.find((item) => item.key === session.departmentKey) ?? defaultDepartment(serviceType);
+  return {
+    agency: serviceType,
+    callsign: session.callsign ?? "",
+    departmentKey: department.key,
+    departmentLabel: department.label,
+    officerName: session.officerName ?? "Field Unit",
+    serviceType,
+    shiftStartedAt: session.shiftStartedAt ?? nowTime(),
+    unitType: session.unitType ?? agencyUnitTypes[serviceType][0],
+  };
+}
+
+function unitIdentity(session: MdtSession) {
+  return `${session.departmentLabel} / ${session.unitType}`;
+}
+
 export function OfficerMdt() {
   const [session, setSession] = useState<MdtSession | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -214,7 +244,9 @@ export function OfficerMdt() {
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as MdtSession;
-          setSession(parsed);
+          const normalized = normalizeSession(parsed);
+          setSession(normalized);
+          window.localStorage.setItem(sessionKey, JSON.stringify(normalized));
           setStatus("Available");
         } catch {
           window.localStorage.removeItem(sessionKey);
@@ -332,6 +364,7 @@ export function OfficerMdt() {
   }, [roster]);
 
   async function startSession(nextSession: MdtSession) {
+    nextSession = normalizeSession(nextSession);
     window.localStorage.setItem(sessionKey, JSON.stringify(nextSession));
     window.localStorage.removeItem(partnerOriginalCallsignKey);
     setSession(nextSession);
@@ -347,7 +380,7 @@ export function OfficerMdt() {
       }
     }
     void loadPartnerState(nextSession);
-    addLog(`${nextSession.callsign} logged into MDT as ${nextSession.agency} ${nextSession.unitType}.`, "Login");
+    addLog(`${nextSession.callsign} logged into MDT as ${unitIdentity(nextSession)}.`, "Login");
   }
 
   async function endSession() {
@@ -730,6 +763,7 @@ export function OfficerMdt() {
           fineTotal: totals.fine,
           jailMonthsTotal: totals.months,
           location: draft.location,
+          attachments: draft.attachments,
           mentions: draft.mentions,
           officers: draft.officers,
           parties: {
@@ -788,7 +822,7 @@ export function OfficerMdt() {
 
   if (!session) return <MdtLogin onSubmit={startSession} />;
 
-  const visibleModules = officerModules.filter((item) => item.agencies.includes(session.agency));
+  const visibleModules = officerModules.filter((item) => item.agencies.includes(session.serviceType));
   const assignedCall = calls.find((call) => call.units.includes(session.callsign)) ?? null;
 
   return (
@@ -804,7 +838,7 @@ export function OfficerMdt() {
                 <h1 className="mt-1 text-lg font-semibold text-white">MDT</h1>
               </div>
             </div>
-            <p className="mt-2 font-mono text-xs text-neutral-500 transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">{session.callsign} / {session.agency}</p>
+            <p className="mt-2 font-mono text-xs text-neutral-500 transition-opacity xl:opacity-0 xl:group-hover/sidebar:opacity-100 xl:group-focus-within/sidebar:opacity-100">{session.callsign} / {unitIdentity(session)}</p>
           </div>
           <nav className="flex gap-2 overflow-x-auto p-3 xl:block xl:w-64 xl:space-y-1 xl:overflow-visible">
             {visibleModules.map((item) => (
@@ -848,7 +882,7 @@ export function OfficerMdt() {
             {module === "active-calls" ? (
               <ActiveCalls calls={calls} onAttach={attachToCall} onDetach={detachFromCall} onSelect={setSelectedCallId} selectedCall={selectedCall} session={session} />
             ) : null}
-            {module === "my-status" ? <MyStatus agency={session.agency} onStatusChange={changeStatus} status={status} /> : null}
+            {module === "my-status" ? <MyStatus agency={session.serviceType} onStatusChange={changeStatus} status={status} /> : null}
             {module === "lookups" ? (
               <Lookups
                 detail={lookupDetail}
@@ -861,6 +895,7 @@ export function OfficerMdt() {
             ) : null}
             {module === "reports" ? (
               <ReportsWorkspace
+                key={`${effectiveRmsSeed.action}-${effectiveRmsSeed.subject?.civilian.id ?? "none"}`}
                 activeCall={selectedCall}
                 lookupNotice={lookupNotice}
                 lookupResults={lookupResults}
@@ -884,19 +919,18 @@ export function OfficerMdt() {
             {module === "panic" ? (
               <PanicPanel active={panicActive} armed={panicArmed} onArm={() => setPanicArmed(true)} onCancel={() => setPanicArmed(false)} onConfirm={activatePanic} />
             ) : null}
-            {module === "settings" ? <Settings /> : null}
-            <section className="mt-4">
-              <PartnerPanel
-                notice={partnerNotice}
-                onAccept={acceptPartner}
-                onEnd={endPartner}
-                onRequest={requestPartner}
-                requests={partnerRequests}
+            {module === "settings" ? (
+              <Settings
+                partnerNotice={partnerNotice}
+                partnerRequests={partnerRequests}
+                partnerSession={partnerSession}
                 roster={roster}
-                session={partnerSession}
-                unitCallsign={session.callsign}
+                session={session}
+                onAcceptPartner={acceptPartner}
+                onEndPartner={endPartner}
+                onRequestPartner={requestPartner}
               />
-            </section>
+            ) : null}
             <section className="mt-4">
               <Panel title="Activity Log">
                 <LogList log={log} />
@@ -910,11 +944,14 @@ export function OfficerMdt() {
 }
 
 function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Promise<void> }) {
-  const [agency, setAgency] = useState<Agency>("Law Enforcement");
+  const [serviceType, setServiceType] = useState<Agency>("Law Enforcement");
+  const [departmentKey, setDepartmentKey] = useState(defaultDepartment("Law Enforcement").key);
   const [callsign, setCallsign] = useState("");
   const [officerName, setOfficerName] = useState("");
   const [unitType, setUnitType] = useState(agencyUnitTypes["Law Enforcement"][0]);
   const [loggingIn, setLoggingIn] = useState(false);
+  const departments = mdtDepartments.filter((department) => department.serviceType === serviceType);
+  const department = mdtDepartments.find((item) => item.key === departmentKey) ?? departments[0] ?? defaultDepartment(serviceType);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -923,9 +960,12 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Prom
     setLoggingIn(true);
     window.setTimeout(() => {
       void onSubmit({
-        agency,
+        agency: serviceType,
         callsign: callsign.trim().toUpperCase(),
+        departmentKey: department.key,
+        departmentLabel: department.label,
         officerName: officerName.trim() || "Field Unit",
+        serviceType,
         shiftStartedAt: nowTime(),
         unitType,
       });
@@ -933,7 +973,8 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Prom
   }
 
   function setNextAgency(nextAgency: Agency) {
-    setAgency(nextAgency);
+    setServiceType(nextAgency);
+    setDepartmentKey(defaultDepartment(nextAgency).key);
     setUnitType(agencyUnitTypes[nextAgency][0]);
   }
 
@@ -976,15 +1017,21 @@ function MdtLogin({ onSubmit }: { onSubmit: (session: MdtSession) => void | Prom
                 />
               </label>
               <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Agency</span>
-                <select value={agency} onChange={(event) => setNextAgency(event.target.value as Agency)} className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Service Type</span>
+                <select value={serviceType} onChange={(event) => setNextAgency(event.target.value as Agency)} className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white">
                   {agencyOptions.map((item) => <option key={item}>{item}</option>)}
                 </select>
               </label>
               <label className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Department</span>
+                <select value={departmentKey} onChange={(event) => setDepartmentKey(event.target.value)} className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white">
+                  {departments.map((item) => <option key={item.key} value={item.key}>{item.label} - {item.name}</option>)}
+                </select>
+              </label>
+              <label className="block md:col-span-2">
                 <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Sub-unit Type</span>
                 <select value={unitType} onChange={(event) => setUnitType(event.target.value as typeof unitType)} className="mt-2 h-11 w-full border border-white/10 bg-neutral-950 px-3 text-sm text-white">
-                  {agencyUnitTypes[agency].map((item) => <option key={item}>{item}</option>)}
+                  {agencyUnitTypes[serviceType].map((item) => <option key={item}>{item}</option>)}
                 </select>
               </label>
             </div>
@@ -1027,7 +1074,8 @@ function TopStatusBar({
           <h2 className="text-xl font-semibold text-white">{session.callsign} - {session.officerName}</h2>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
-          <Pill>{session.agency}</Pill>
+          <Pill>{session.serviceType}</Pill>
+          <Pill>{session.departmentLabel}</Pill>
           <Pill>{session.unitType}</Pill>
           <Pill className={statusClass(status)}>{status}</Pill>
           <Pill className={panicActive ? "border-rose-300/50 bg-rose-400/20 text-rose-100" : ""}>{panicActive ? "PANIC ACTIVE" : "Panic clear"}</Pill>
@@ -1067,7 +1115,7 @@ function HomeDashboard({
   status: UnitStatus;
 }) {
   const alerts = [
-    ...calls.filter((call) => call.priority === "Critical" && (call.serviceType === session.agency || call.serviceType === "Multi-agency")),
+    ...calls.filter((call) => call.priority === "Critical" && (call.serviceType === session.serviceType || call.serviceType === "Multi-agency")),
     ...(panicActive ? [{ callNumber: "PANIC", incidentType: "Unit emergency", address: "Current GPS pending FiveM sync" } as MdtCall] : []),
   ];
 
@@ -1076,7 +1124,7 @@ function HomeDashboard({
       <Panel title="Unit Dashboard">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Info label="Callsign" value={session.callsign} />
-          <Info label="Agency / Type" value={`${session.agency} / ${session.unitType}`} />
+          <Info label="Department / Type" value={unitIdentity(session)} />
           <Info label="Current Status" value={status} />
           <Info label="Assigned Call" value={assignedCall?.callNumber ?? "No active assignment"} />
         </div>
@@ -1122,7 +1170,7 @@ function ActiveCalls({
   selectedCall: MdtCall | null;
   session: MdtSession;
 }) {
-  const filtered = calls.filter((call) => call.serviceType === session.agency || call.serviceType === "Multi-agency");
+  const filtered = calls.filter((call) => call.serviceType === session.serviceType || call.serviceType === "Multi-agency");
   return (
     <div className="grid gap-4 2xl:grid-cols-[1fr_390px]">
       <Panel title="Officer Call Queue">
@@ -1399,7 +1447,7 @@ function ReportsWorkspace({
   selectedLookup: CadLookupDetail | null;
   session: MdtSession;
 }) {
-  const [mode, setMode] = useState<"create" | "menu" | "review">("menu");
+  const [mode, setMode] = useState<"create" | "menu" | "review">(() => (seed.subject || seed.action !== "Incident Report" ? "create" : "menu"));
   const [reportNumber, setReportNumber] = useState("");
   const reportTypes: RmsAction[] = ["Incident Report", "Field Interview", "Warning", "Fix-it Ticket", "Citation", "Arrest Report"];
 
@@ -1481,6 +1529,7 @@ function ReportReviewPanel({ report }: { report: RmsReportReview | null }) {
   const meta = report.metadata;
   const charges = Array.isArray(meta.charges) ? meta.charges as PenalCodeEntry[] : [];
   const mentions = Array.isArray(meta.mentions) ? meta.mentions as RmsMention[] : [];
+  const attachments = Array.isArray(meta.attachments) ? meta.attachments as RmsAttachment[] : [];
   const officers = Array.isArray(meta.officers) ? meta.officers as RmsOfficer[] : [];
   return (
     <div className="rounded-md bg-neutral-800/60 p-3 text-neutral-950">
@@ -1496,9 +1545,9 @@ function ReportReviewPanel({ report }: { report: RmsReportReview | null }) {
         <PaperSection title="Narrative / Record">
           <pre className="whitespace-pre-wrap border border-neutral-950 bg-[#fffdf5] p-3 font-mono text-sm leading-6 text-neutral-950">{report.description}</pre>
           <div className="mt-3 flex flex-wrap gap-2">
-            {mentions.map((mention) => (
-              <button key={`${mention.type}-${mention.id}`} type="button" className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs font-bold uppercase">
-                @{mention.label}
+            {(attachments.length ? attachments : mentions.map((mention) => ({ ...mention, role: "Reference" as const }))).map((attachment) => (
+              <button key={`${attachment.type}-${attachment.id}-${attachment.role}`} type="button" className="border border-neutral-950 bg-[#fffdf5] px-2 py-1 text-xs font-bold uppercase">
+                {attachment.role}: {attachment.label}
               </button>
             ))}
           </div>
@@ -1585,6 +1634,24 @@ function RmsWriter({
     }));
   }
 
+  function addAttachment(attachment: RmsAttachment) {
+    setDraft((current) => ({
+      ...current,
+      attachments: current.attachments.some((item) => item.type === attachment.type && item.id === attachment.id && item.role === attachment.role)
+        ? current.attachments
+        : [...current.attachments, attachment],
+      mentions: current.mentions.some((item) => item.type === attachment.type && item.id === attachment.id)
+        ? current.mentions
+        : [...current.mentions, { id: attachment.id, label: attachment.label, type: attachment.type }],
+    }));
+  }
+
+  function addLookupResultAttachment(result: CadLookupResult) {
+    const type: RmsAttachment["type"] = result.source === "Vehicle" ? "vehicle" : result.source === "Weapon" ? "weapon" : "person";
+    const role: RmsAttachment["role"] = result.source === "Vehicle" ? "Vehicle" : result.source === "Weapon" ? "Weapon" : "Reference";
+    addAttachment({ detail: result.meta, id: result.civilianId || result.id, label: result.label, role, type });
+  }
+
   function insertMention(mention: RmsMention) {
     patch({ narrative: `${draft.narrative}${draft.narrative.endsWith(" ") || !draft.narrative ? "" : " "}@${mention.label} ` });
   }
@@ -1610,6 +1677,7 @@ function RmsWriter({
       return exists ? current : { ...current, [key]: [...current[key], selectedName] };
     });
     addMention({ id: selectedLookup.civilian.id, label: selectedName, type: "person" });
+    addAttachment({ id: selectedLookup.civilian.id, label: selectedName, role: key === "suspects" ? "Suspect" : "Witness", type: "person" });
   }
 
   function addOfficer(value: string) {
@@ -1619,7 +1687,15 @@ function RmsWriter({
       const exists = current.officers.some((officer) => `${officer.callsign} ${officer.name}`.toLowerCase().includes(nextValue.toLowerCase()));
       return exists ? current : { ...current, officers: [...current.officers, { callsign: nextValue.toUpperCase(), name: nextValue, role: "Assisting Officer" }] };
     });
+    addAttachment({ id: nextValue.toUpperCase(), label: nextValue.toUpperCase(), role: "Officer", type: "officer" });
     setOfficerInput("");
+  }
+
+  function removeAttachment(attachment: RmsAttachment) {
+    setDraft((current) => ({
+      ...current,
+      attachments: current.attachments.filter((item) => item !== attachment),
+    }));
   }
 
   const selectedName = selectedLookup ? `${selectedLookup.civilian.first_name} ${selectedLookup.civilian.last_name}`.trim() : "";
@@ -1657,9 +1733,18 @@ function RmsWriter({
           <p className="mt-2 text-xs text-neutral-700">{lookupNotice}</p>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
             {lookupResults.slice(0, 6).map((result) => (
-              <button key={`${result.source}-${result.id}`} type="button" onClick={() => onSelectLookup(result)} className="border border-neutral-950 bg-[#fffdf5] p-2 text-left text-xs hover:bg-neutral-100">
+              <button
+                key={`${result.source}-${result.id}`}
+                type="button"
+                onClick={() => {
+                  addLookupResultAttachment(result);
+                  onSelectLookup(result);
+                }}
+                className="border border-neutral-950 bg-[#fffdf5] p-2 text-left text-xs hover:bg-neutral-100"
+              >
                 <span className="font-black uppercase">{result.source}</span> / <span className="font-semibold">{result.label}</span>
                 <span className="mt-1 block text-neutral-700">{result.meta || "No additional details"}</span>
+                <span className="mt-2 inline-block border border-neutral-950 px-2 py-1 font-black uppercase">Attach to report</span>
               </button>
             ))}
           </div>
@@ -1680,7 +1765,7 @@ function RmsWriter({
           <div className="mt-3 flex flex-wrap gap-2">
             {selectedLookup ? (
               <>
-                <button type="button" onClick={() => { patch({ primarySubject: selectedLookup }); addMention({ id: selectedLookup.civilian.id, label: selectedName, type: "person" }); }} className="min-h-9 border border-neutral-950 bg-neutral-950 px-3 text-xs font-black uppercase tracking-[0.14em] text-white">Use selected as subject</button>
+                <button type="button" onClick={() => { patch({ primarySubject: selectedLookup }); addAttachment({ id: selectedLookup.civilian.id, label: selectedName, role: "Primary Subject", type: "person" }); }} className="min-h-9 border border-neutral-950 bg-neutral-950 px-3 text-xs font-black uppercase tracking-[0.14em] text-white">Use selected as subject</button>
                 <button type="button" onClick={() => addSelectedParty("witnesses")} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected witness</button>
                 <button type="button" onClick={() => addSelectedParty("suspects")} className="min-h-9 border border-neutral-950 px-3 text-xs font-bold uppercase">Add selected suspect</button>
               </>
@@ -1703,6 +1788,17 @@ function RmsWriter({
                 @{mention.label}
               </button>
             ))}
+          </div>
+          <div className="mt-3 border border-neutral-950">
+            <p className="border-b border-neutral-950 bg-neutral-200 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]">Structured Attachments</p>
+            <div className="grid gap-px bg-neutral-950 sm:grid-cols-2">
+              {draft.attachments.length ? draft.attachments.map((attachment) => (
+                <button key={`${attachment.type}-${attachment.id}-${attachment.role}`} type="button" onClick={() => removeAttachment(attachment)} className="bg-[#fffdf5] px-2 py-2 text-left text-xs text-neutral-950">
+                  <span className="font-black uppercase">{attachment.role}</span> / {attachment.label}
+                  {attachment.detail ? <span className="mt-1 block text-neutral-700">{attachment.detail}</span> : null}
+                </button>
+              )) : <p className="bg-[#fffdf5] px-2 py-2 text-xs text-neutral-700">Use the lookup panel above to attach people, vehicles, weapons, calls, and references.</p>}
+            </div>
           </div>
         </PaperSection>
 
@@ -1768,8 +1864,14 @@ function RmsWriter({
 function makeRmsDraft(seed: RmsSeed, activeCall: MdtCall | null, session: MdtSession): RmsDraft {
   const stamp = Date.now().toString().slice(-6);
   const subjectName = seed.subject ? `${seed.subject.civilian.first_name} ${seed.subject.civilian.last_name}`.trim() : "";
+  const attachments: RmsAttachment[] = [
+    ...(seed.subject && subjectName ? [{ id: seed.subject.civilian.id, label: subjectName, role: "Primary Subject" as const, type: "person" as const }] : []),
+    ...(activeCall ? [{ detail: activeCall.incidentType, id: activeCall.id, label: activeCall.callNumber, role: "Call" as const, type: "call" as const }] : []),
+    { id: session.callsign, label: session.callsign, role: "Officer" as const, type: "officer" as const },
+  ];
   return {
     action: seed.action,
+    attachments,
     callNumber: activeCall?.callNumber ?? "",
     charges: [],
     location: activeCall?.address ?? "",
@@ -1918,7 +2020,7 @@ function SupervisorPanel({ allowed, calls, panicActive, roster }: { allowed: boo
           {roster.map((unit) => (
             <div key={unit.callsign} className="grid gap-2 rounded-md border border-white/10 bg-neutral-950 p-3 text-sm lg:grid-cols-[0.6fr_0.9fr_0.8fr_0.9fr_1fr]">
               <span className="font-mono text-white">{unit.callsign}</span>
-              <span>{unit.agency}</span>
+              <span>{unit.departmentLabel || unit.agency}</span>
               <span>{unit.unitType}</span>
               <span className={`rounded border px-2 py-1 text-xs ${statusClass(unit.status)}`}>{unit.status}</span>
               <span className="text-neutral-400">{unit.assignedCall}</span>
@@ -1970,11 +2072,47 @@ function PanicPanel({
   );
 }
 
-function Settings() {
+function Settings({
+  onAcceptPartner,
+  onEndPartner,
+  onRequestPartner,
+  partnerNotice,
+  partnerRequests,
+  partnerSession,
+  roster,
+  session,
+}: {
+  onAcceptPartner: (requestId: string) => void;
+  onEndPartner: () => void;
+  onRequestPartner: (targetCallsign: string, combinedCallsign: string) => void;
+  partnerNotice: string;
+  partnerRequests: PartnerRequest[];
+  partnerSession: PartnerSession | null;
+  roster: UnitRosterEntry[];
+  session: MdtSession;
+}) {
   return (
-    <Panel title="MDT Settings">
-      <Notice text="Theme, keybinds, radio channels, agency permissions, and FiveM sync settings are Under Construction." />
-    </Panel>
+    <div className="grid gap-4 2xl:grid-cols-[1fr_1fr]">
+      <Panel title="Terminal Settings">
+        <div className="grid gap-3 md:grid-cols-2">
+          <Info label="Service" value={session.serviceType} />
+          <Info label="Department" value={unitIdentity(session)} />
+          <Info label="Radio Channel" value="Awaiting FiveM sync" />
+          <Info label="AVL / GPS" value="Awaiting FiveM sync" />
+        </div>
+        <Notice text="Theme, keybinds, radio channels, agency permissions, and FiveM sync settings are Under Construction." />
+      </Panel>
+      <PartnerPanel
+        notice={partnerNotice}
+        onAccept={onAcceptPartner}
+        onEnd={onEndPartner}
+        onRequest={onRequestPartner}
+        requests={partnerRequests}
+        roster={roster}
+        session={partnerSession}
+        unitCallsign={session.callsign}
+      />
+    </div>
   );
 }
 
@@ -2015,30 +2153,30 @@ function CallDetail({ call }: { call: MdtCall }) {
 
 function Panel({ children, title }: { children: React.ReactNode; title: string }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-neutral-900">
-      <div className="border-b border-white/10 px-4 py-3">
-        <h2 className="text-base font-semibold text-white">{title}</h2>
+    <section className="rounded-md border border-white/15 bg-[#111417] shadow-xl shadow-black/20">
+      <div className="border-b border-white/10 bg-[#171a1f] px-4 py-2">
+        <h2 className="font-mono text-sm font-bold uppercase tracking-[0.08em] text-white">{title}</h2>
       </div>
-      <div className="p-4">{children}</div>
+      <div className="p-3">{children}</div>
     </section>
   );
 }
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
-      <p className="text-xs uppercase tracking-[0.14em] text-neutral-500">{label}</p>
-      <p className="mt-1 break-words text-sm text-neutral-200">{value}</p>
+    <div className="rounded border border-white/10 bg-[#05070a] p-3">
+      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-neutral-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-neutral-100">{value}</p>
     </div>
   );
 }
 
 function Notice({ text }: { text: string }) {
-  return <div className="mt-3 rounded-md border border-dashed border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-sm text-amber-100">{text}</div>;
+  return <div className="mt-3 rounded border border-dashed border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-sm text-amber-100">{text}</div>;
 }
 
 function Pill({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <span className={`rounded-md border border-white/15 bg-white/[0.06] px-2 py-1 text-neutral-200 ${className}`}>{children}</span>;
+  return <span className={`rounded border border-white/15 bg-white/[0.06] px-2 py-1 font-mono text-neutral-200 ${className}`}>{children}</span>;
 }
 
 function LogList({ log }: { log: ActivityLogEntry[] }) {

@@ -41,12 +41,13 @@ insert into public.access_departments (key, name, category, description, sort_or
   ('bcso', 'Blaine County Sheriff''s Office', 'law_enforcement', 'County and rural operations.', 20),
   ('lspd', 'Los Santos Police Department', 'law_enforcement', 'City policing.', 30),
   ('fib', 'Federal Bureau of Investigation', 'law_enforcement', 'Federal investigations.', 40),
-  ('lsfd', 'Los Santos Fire Department', 'fire_ems', 'Fire and EMS.', 50),
-  ('sacom', 'San Andreas Communications', 'dispatch', 'Dispatch backbone.', 60),
-  ('satr', 'San Andreas Towing and Recovery', 'services', 'Towing and services.', 70),
-  ('civilian', 'Civilian Operations', 'civilian', 'Civilian progression tiers.', 80),
-  ('doj', 'Department of Justice', 'government', 'Courts and legal system.', 90),
-  ('government', 'Governor''s Office', 'government', 'State leadership.', 100)
+  ('lsfd', 'Los Santos Fire Department', 'fire', 'Fire suppression and rescue.', 50),
+  ('saems', 'San Andreas Emergency Medical Services', 'ems', 'Emergency medical services.', 60),
+  ('sacom', 'San Andreas Communications', 'dispatch', 'Dispatch backbone.', 70),
+  ('satr', 'San Andreas Towing and Recovery', 'services', 'Towing and services.', 80),
+  ('civilian', 'Civilian Operations', 'civilian', 'Civilian progression tiers.', 90),
+  ('doj', 'Department of Justice', 'government', 'Courts and legal system.', 100),
+  ('government', 'Governor''s Office', 'government', 'State leadership.', 110)
 on conflict (key) do update set
   name = excluded.name,
   category = excluded.category,
@@ -120,6 +121,12 @@ insert into public.access_roles (key, name, description, priority, is_system, is
   ('lsfd_assistant_chief', 'LSFD Assistant Chief', 'Los Santos Fire Department command rank.', 200, false, false, 'lsfd', 100, 'rank'),
   ('lsfd_deputy_chief', 'LSFD Deputy Chief', 'Los Santos Fire Department command rank.', 210, false, false, 'lsfd', 110, 'rank'),
   ('lsfd_fire_chief', 'LSFD Fire Chief', 'Los Santos Fire Department command rank.', 220, false, false, 'lsfd', 120, 'rank'),
+  ('saems_emt', 'SAEMS EMT', 'San Andreas EMS rank.', 110, false, false, 'saems', 10, 'rank'),
+  ('saems_paramedic', 'SAEMS Paramedic', 'San Andreas EMS rank.', 120, false, false, 'saems', 20, 'rank'),
+  ('saems_senior_paramedic', 'SAEMS Senior Paramedic', 'San Andreas EMS rank.', 130, false, false, 'saems', 30, 'rank'),
+  ('saems_field_supervisor', 'SAEMS Field Supervisor', 'San Andreas EMS rank.', 140, false, false, 'saems', 40, 'rank'),
+  ('saems_captain', 'SAEMS Captain', 'San Andreas EMS command rank.', 150, false, false, 'saems', 50, 'rank'),
+  ('saems_chief', 'SAEMS Chief of EMS', 'San Andreas EMS command rank.', 160, false, false, 'saems', 60, 'rank'),
   ('sacom_dispatcher_trainee', 'SACOM Dispatcher Trainee', 'San Andreas Communications rank.', 110, false, false, 'sacom', 10, 'rank'),
   ('sacom_dispatcher_i', 'SACOM Dispatcher I', 'San Andreas Communications rank.', 120, false, false, 'sacom', 20, 'rank'),
   ('sacom_dispatcher_ii', 'SACOM Dispatcher II', 'San Andreas Communications rank.', 130, false, false, 'sacom', 30, 'rank'),
@@ -160,10 +167,13 @@ insert into public.access_certifications (key, name, description, department_key
   ('fib_cyber', 'FIB Cyber Division', 'FIB cyber access.', 'fib', 'subdivision'),
   ('fib_swat_hrt', 'FIB SWAT/HRT', 'FIB tactical operations access.', 'fib', 'subdivision'),
   ('lsfd_fire_suppression', 'LSFD Fire Suppression', 'LSFD fire suppression access.', 'lsfd', 'subdivision'),
-  ('lsfd_ems_division', 'LSFD EMS Division', 'LSFD EMS access.', 'lsfd', 'subdivision'),
   ('lsfd_rescue_division', 'LSFD Rescue Division', 'LSFD rescue access.', 'lsfd', 'subdivision'),
   ('lsfd_hazmat', 'LSFD HazMat Division', 'LSFD HazMat access.', 'lsfd', 'subdivision'),
   ('lsfd_air_rescue', 'LSFD Air Rescue', 'LSFD air rescue access.', 'lsfd', 'subdivision'),
+  ('saems_als', 'SAEMS Advanced Life Support', 'EMS ALS certification.', 'saems', 'subdivision'),
+  ('saems_bls', 'SAEMS Basic Life Support', 'EMS BLS certification.', 'saems', 'subdivision'),
+  ('saems_air_medical', 'SAEMS Air Medical', 'EMS air medical access.', 'saems', 'subdivision'),
+  ('saems_field_training', 'SAEMS Field Training', 'EMS field training access.', 'saems', 'subdivision'),
   ('sacom_law_dispatch', 'SACOM Law Enforcement Dispatch', 'Law dispatch access.', 'sacom', 'subdivision'),
   ('sacom_fire_ems_dispatch', 'SACOM Fire and EMS Dispatch', 'Fire and EMS dispatch access.', 'sacom', 'subdivision'),
   ('sacom_tactical_dispatch', 'SACOM Tactical Dispatch', 'Major incident and tactical dispatch access.', 'sacom', 'subdivision'),
@@ -193,7 +203,7 @@ join public.access_permissions p on
   or (c.key = 'interviewer' and p.key in ('admin:access', 'interviews:conduct'))
   or (c.department_key in ('sasp', 'bcso', 'lspd', 'fib') and p.key in ('cad:access', 'cad:officer', 'reports:write'))
   or (c.department_key = 'sacom' and p.key in ('cad:access', 'cad:dispatch'))
-  or (c.department_key = 'lsfd' and p.key in ('cad:access', 'cad:officer', 'reports:write'))
+  or (c.department_key in ('lsfd', 'saems') and p.key in ('cad:access', 'cad:officer', 'reports:write'))
   or (c.department_key = 'civilian' and p.key in ('cad:access', 'cad:civilian'))
 on conflict do nothing;
 
@@ -202,7 +212,7 @@ select r.id, p.key
 from public.access_roles r
 join public.access_permissions p on
   (r.department_key in ('sasp', 'bcso', 'lspd', 'fib') and p.key in ('cad:access', 'cad:officer', 'reports:write'))
-  or (r.department_key = 'lsfd' and p.key in ('cad:access', 'cad:officer', 'reports:write'))
+  or (r.department_key in ('lsfd', 'saems') and p.key in ('cad:access', 'cad:officer', 'reports:write'))
   or (r.department_key = 'sacom' and p.key in ('cad:access', 'cad:dispatch'))
   or (r.key = 'lspd_fto' and p.key in ('cad:fto', 'fto:manage'))
 on conflict do nothing;

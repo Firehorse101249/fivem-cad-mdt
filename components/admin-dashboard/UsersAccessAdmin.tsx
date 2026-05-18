@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { departmentCatalog, departmentLabel } from "@/src/lib/departments";
 
 type User = {
   display_name: string | null;
@@ -12,13 +13,20 @@ type User = {
   steam_id64?: string | null;
 };
 
-type AccessItem = { certification_kind?: string | null; department_key?: string | null; id: string; name: string; role_kind?: string | null };
+type AccessItem = { certification_kind?: string | null; department_key?: string | null; id: string; name: string; role_kind?: string | null; rank_order?: number | null };
+type Department = { category?: string | null; key: string; name: string; sort_order?: number | null };
 
 export function UsersAccessAdmin() {
   const [users, setUsers] = useState<User[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [roles, setRoles] = useState<AccessItem[]>([]);
   const [certifications, setCertifications] = useState<AccessItem[]>([]);
+  const [departments, setDepartments] = useState<Department[]>(departmentCatalog.map((department) => ({
+    category: department.category,
+    key: department.key,
+    name: department.name,
+    sort_order: department.sortOrder,
+  })));
   const [roleIds, setRoleIds] = useState<string[]>([]);
   const [certificationIds, setCertificationIds] = useState<string[]>([]);
   const [createDisplayName, setCreateDisplayName] = useState("");
@@ -51,6 +59,9 @@ export function UsersAccessAdmin() {
     }
     setRoles(result.roles ?? []);
     setCertifications(result.certifications ?? []);
+    if (Array.isArray(result.departments) && result.departments.length) {
+      setDepartments(result.departments);
+    }
     setRoleIds((result.roleAssignments ?? []).map((row: { role_id: string }) => row.role_id));
     setCertificationIds((result.certificationAssignments ?? []).map((row: { certification_id: string }) => row.certification_id));
   }
@@ -136,6 +147,7 @@ export function UsersAccessAdmin() {
   }
 
   const selected = users.find((user) => user.id === selectedId);
+  const departmentOptions = useMemo(() => normalizeDepartments(departments), [departments]);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
@@ -182,8 +194,8 @@ export function UsersAccessAdmin() {
             <p className="mt-2 text-sm text-neutral-400">Legacy role: {selected.role}</p>
             <p className="mt-1 text-sm text-neutral-400">Membership: {selected.membership_status ?? "not_applied"}</p>
             <div className="mt-5 grid gap-5 lg:grid-cols-2">
-              <AccessList items={roles} selected={roleIds} title="Roles" toggle={(id) => toggle(roleIds, id, setRoleIds)} />
-              <AccessList items={certifications} selected={certificationIds} title="Certifications" toggle={(id) => toggle(certificationIds, id, setCertificationIds)} />
+              <AccessList departments={departmentOptions} items={roles} selected={roleIds} title="Roles" toggle={(id) => toggle(roleIds, id, setRoleIds)} />
+              <AccessList departments={departmentOptions} items={certifications} selected={certificationIds} title="Certifications" toggle={(id) => toggle(certificationIds, id, setCertificationIds)} />
             </div>
             {message ? <p className="mt-4 rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100">{message}</p> : null}
             {error ? <p className="mt-4 rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
@@ -204,30 +216,86 @@ export function UsersAccessAdmin() {
   );
 }
 
+type DepartmentView = { category: string; key: string; name: string; sortOrder: number };
+type AccessGroup = { department: DepartmentView; items: AccessItem[] };
+
+function normalizeDepartments(departments: Department[]): DepartmentView[] {
+  const fromApi = departments.map((department) => {
+    const fallback = departmentCatalog.find((item) => item.key === department.key);
+    return {
+      category: department.category ?? fallback?.category ?? "system",
+      key: department.key,
+      name: department.name,
+      sortOrder: department.sort_order ?? fallback?.sortOrder ?? 999,
+    };
+  });
+  const merged = [...fromApi];
+  for (const department of departmentCatalog) {
+    if (!merged.some((item) => item.key === department.key)) {
+      merged.push({ category: department.category, key: department.key, name: department.name, sortOrder: department.sortOrder });
+    }
+  }
+  return merged.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+}
+
+function groupedItems(items: AccessItem[], departments: DepartmentView[]): AccessGroup[] {
+  const systemDepartment = { category: "system", key: "__system", name: "System / Unassigned", sortOrder: -1 };
+  return [systemDepartment, ...departments]
+    .map((department) => ({
+      department,
+      items: items
+        .filter((item) => (item.department_key ?? "__system") === department.key)
+        .sort((a, b) => Number(a.rank_order ?? 999) - Number(b.rank_order ?? 999) || a.name.localeCompare(b.name)),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
 function AccessList({
+  departments,
   items,
   selected,
   title,
   toggle,
 }: {
+  departments: DepartmentView[];
   items: AccessItem[];
   selected: string[];
   title: string;
   toggle: (id: string) => void;
 }) {
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const groups = useMemo(() => groupedItems(items, departments), [departments, items]);
   return (
-    <div>
-      <h3 className="font-semibold text-white">{title}</h3>
-      <div className="mt-3 space-y-2">
-        {items.map((item) => (
-          <label className="flex items-center gap-3 rounded-md border border-white/10 bg-neutral-950 p-3 text-sm text-neutral-200" key={item.id}>
-            <input checked={selected.includes(item.id)} className="size-4 accent-sky-400" onChange={() => toggle(item.id)} type="checkbox" />
-            <span>
-              <span className="block">{item.name}</span>
-              <span className="text-xs text-neutral-500">{[item.department_key, item.role_kind ?? item.certification_kind].filter(Boolean).join(" / ")}</span>
-            </span>
-          </label>
-        ))}
+    <div className="rounded-md border border-white/10 bg-neutral-950 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-semibold text-white">{title}</h3>
+        <span className="font-mono text-xs text-neutral-500">{selected.length} selected</span>
+      </div>
+      <div className="mt-3 max-h-[580px] space-y-3 overflow-y-auto pr-1">
+        {groups.map((group) => {
+          const isClosed = closed[group.department.key] ?? false;
+          return (
+            <div className="rounded border border-white/10 bg-[#090b0f]" key={group.department.key}>
+              <button className="flex w-full items-center justify-between gap-3 border-b border-white/10 px-3 py-2 text-left" onClick={() => setClosed((current) => ({ ...current, [group.department.key]: !isClosed }))} type="button">
+                <span className="text-sm font-semibold text-white">{group.department.key === "__system" ? "System" : departmentLabel(group.department.key)} <span className="font-normal text-neutral-400">{group.department.name}</span></span>
+                <span className="font-mono text-xs text-neutral-500">{isClosed ? "+" : "-"} {group.items.length}</span>
+              </button>
+              {!isClosed ? (
+                <div className="space-y-2 p-2">
+                  {group.items.map((item) => (
+                    <label className="flex items-center gap-3 rounded border border-white/10 bg-neutral-950 p-2 text-sm text-neutral-200" key={item.id}>
+                      <input checked={selected.includes(item.id)} className="size-4 accent-sky-400" onChange={() => toggle(item.id)} type="checkbox" />
+                      <span>
+                        <span className="block">{item.name}</span>
+                        <span className="font-mono text-xs uppercase tracking-[0.12em] text-neutral-500">{[departmentLabel(item.department_key), item.role_kind ?? item.certification_kind].filter(Boolean).join(" / ")}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
