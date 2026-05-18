@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CadRecordsWorkspace } from "@/components/cad-records/CadRecordsWorkspace";
 
 export default function ReportsPage() {
-  return (
-    <UnderConstruction
-      title="Reports"
-      description="Incident reports, supplements, narratives, approvals, and report history are planned for this module."
-    />
-  );
+  return <CadRecordsWorkspace module="reports" />;
 }

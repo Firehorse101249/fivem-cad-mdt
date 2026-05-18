@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CadRecordsWorkspace } from "@/components/cad-records/CadRecordsWorkspace";
 
 export default function BolosPage() {
-  return (
-    <UnderConstruction
-      title="BOLOs"
-      description="Be-on-the-lookout notices for people, vehicles, and officer safety information are planned here."
-    />
-  );
+  return <CadRecordsWorkspace module="bolos" />;
 }

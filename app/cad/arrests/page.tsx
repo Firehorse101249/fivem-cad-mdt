@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CadRecordsWorkspace } from "@/components/cad-records/CadRecordsWorkspace";
 
 export default function ArrestsPage() {
-  return (
-    <UnderConstruction
-      title="Arrests"
-      description="Arrest booking, charges, evidence references, and custody notes are reserved for this workflow."
-    />
-  );
+  return <CadRecordsWorkspace module="arrests" />;
 }

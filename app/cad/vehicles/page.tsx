@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CadRecordsWorkspace } from "@/components/cad-records/CadRecordsWorkspace";
 
 export default function VehiclesPage() {
-  return (
-    <UnderConstruction
-      title="Vehicles"
-      description="Vehicle registration, plate lookup, ownership records, and vehicle flags will be built here."
-    />
-  );
+  return <CadRecordsWorkspace module="vehicles" />;
 }

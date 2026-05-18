@@ -2,7 +2,7 @@ export type CadSection = {
   title: string;
   href: string;
   description: string;
-  status: "Ready" | "Under Construction";
+  status: "Ready" | "Under Construction" | "Workflow Preview";
 };
 
 export const cadSections: CadSection[] = [
@@ -29,6 +29,48 @@ export const cadSections: CadSection[] = [
     href: "/cad/civilians",
     description: "Civilian profiles, identifiers, licenses, and RP character records.",
     status: "Ready",
+  },
+  {
+    title: "Calls",
+    href: "/cad/calls",
+    description: "Active call review, dispatch notes, assigned units, and call detail history.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "Vehicles",
+    href: "/cad/vehicles",
+    description: "Plate, VIN, vehicle, and owner lookup workflows with structured detail overlays.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "Reports",
+    href: "/cad/reports",
+    description: "Incident, supplement, warning, citation, and arrest report drafting surfaces.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "Warrants",
+    href: "/cad/warrants",
+    description: "Restricted warrant-style lookup and professional request drafting workflow.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "BOLOs",
+    href: "/cad/bolos",
+    description: "Officer safety alerts, person, vehicle, weapon, and missing person records.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "Arrests",
+    href: "/cad/arrests",
+    description: "Arrest packet forms for charges, custody status, evidence, and narrative notes.",
+    status: "Workflow Preview",
+  },
+  {
+    title: "Citations",
+    href: "/cad/citations",
+    description: "Citation writing forms with violation, court, fine, vehicle, and remarks sections.",
+    status: "Workflow Preview",
   },
   {
     title: "Businesses",

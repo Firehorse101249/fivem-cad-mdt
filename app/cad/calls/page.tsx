@@ -1,10 +1,5 @@
-import { UnderConstruction } from "../../_components/UnderConstruction";
+import { CadRecordsWorkspace } from "@/components/cad-records/CadRecordsWorkspace";
 
 export default function CallsPage() {
-  return (
-    <UnderConstruction
-      title="Calls"
-      description="Active calls, call history, timestamps, notes, and dispositions will be organized here."
-    />
-  );
+  return <CadRecordsWorkspace module="calls" />;
 }
